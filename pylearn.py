@@ -1,102 +1,126 @@
 #!/usr/bin/env python3
-"""PyLearn - Minimal Mobile Terminal"""
+"""
+PyLearn - Secure Docker-based Mobile Terminal
+"""
 
-import os, pty, select, signal, uuid, asyncio, fcntl
+import os
+import asyncio
+import docker
+import tempfile
+import shutil
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import HTMLResponse
 
-TIMEOUT = 60
+# --- CONFIGURATION ---
 PORT = int(os.getenv("PORT", 8000))
+DOCKER_IMAGE = "python:3.11-slim"
+MEM_LIMIT = "64m"
+
+try:
+    client = docker.from_env()
+    try:
+        client.images.get(DOCKER_IMAGE)
+    except docker.errors.ImageNotFound:
+        print(f"Pulling {DOCKER_IMAGE}...")
+        client.images.pull(DOCKER_IMAGE)
+except Exception as e:
+    print(f"CRITICAL ERROR: Docker is not ready.\n{e}")
+    exit(1)
+
 app = FastAPI()
-
-
-def set_nonblocking(fd):
-    fcntl.fcntl(fd, fcntl.F_SETFL, fcntl.fcntl(fd, fcntl.F_GETFL) | os.O_NONBLOCK)
 
 
 @app.websocket("/ws")
 async def run_code(ws: WebSocket):
     await ws.accept()
-    master_fd = pid = tmp = None
+    container = None
+    temp_dir = tempfile.mkdtemp(prefix="pylearn_")
+
     try:
         data = await ws.receive_json()
         code = data.get("code", "")
-        tmp = f"/tmp/py_{uuid.uuid4().hex[:8]}.py"
-        with open(tmp, "w") as f:
-            f.write(code)
-        pid, master_fd = pty.fork()
-        if pid == 0:
-            os.execvp("python3", ["python3", "-u", tmp])
-        else:
-            set_nonblocking(master_fd)
-            await ws.send_json({"t": "start"})
-            start = asyncio.get_event_loop().time()
+        if not code:
+            return
+
+        # Startup delay + unbuffered python (-u)
+        safe_code = "import time; time.sleep(0.5)\n" + code
+
+        script_path = os.path.join(temp_dir, "script.py")
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.write(safe_code)
+
+        # Create Container
+        container = client.containers.create(
+            DOCKER_IMAGE,
+            command=["python3", "-u", "/app/script.py"],
+            working_dir="/app",
+            stdin_open=True,
+            tty=True,
+            detach=True,
+            network_disabled=True,
+            mem_limit=MEM_LIMIT,
+            nano_cpus=int(0.5 * 1e9),
+            pids_limit=20,
+            read_only=True,
+            volumes={temp_dir: {"bind": "/app", "mode": "rw"}},
+            tmpfs={"/tmp": ""},
+        )
+
+        container.start()
+
+        # Attach Socket
+        socket = container.attach_socket(
+            params={"stdin": 1, "stdout": 1, "stderr": 1, "stream": 1}
+        )
+
+        async def forward_output():
+            loop = asyncio.get_event_loop()
             while True:
-                if asyncio.get_event_loop().time() - start > TIMEOUT:
-                    await ws.send_json({"t": "out", "d": f"\n[Timeout {TIMEOUT}s]\n"})
-                    break
-                result = os.waitpid(pid, os.WNOHANG)
-                if result[0] != 0:
-                    try:
-                        while True:
-                            d = os.read(master_fd, 1024)
-                            if not d:
-                                break
-                            await ws.send_json(
-                                {"t": "out", "d": d.decode("utf-8", errors="replace")}
-                            )
-                    except:
-                        pass
-                    await ws.send_json(
-                        {
-                            "t": "end",
-                            "c": os.WEXITSTATUS(result[1])
-                            if os.WIFEXITED(result[1])
-                            else -1,
-                        }
-                    )
-                    pid = None
-                    break
                 try:
-                    r, _, _ = select.select([master_fd], [], [], 0.01)
-                    if master_fd in r:
-                        d = os.read(master_fd, 1024)
-                        if d:
-                            await ws.send_json(
-                                {"t": "out", "d": d.decode("utf-8", errors="replace")}
-                            )
+                    data = await loop.run_in_executor(None, socket.read, 1024)
+                    if not data:
+                        break
+                    await ws.send_json({"t": "out", "d": data.decode(errors="replace")})
                 except:
-                    pass
+                    break
+
+        output_task = asyncio.create_task(forward_output())
+
+        # Main Loop
+        try:
+            while True:
+                container.reload()
+                if container.status != "running":
+                    break
                 try:
-                    msg = await asyncio.wait_for(ws.receive_json(), timeout=0.01)
+                    msg = await asyncio.wait_for(ws.receive_json(), timeout=0.2)
                     if msg.get("t") == "in":
-                        os.write(master_fd, msg.get("d", "").encode())
+                        char = msg.get("d")
+                        os.write(socket.fileno(), char.encode())
                 except asyncio.TimeoutError:
                     pass
                 except:
                     break
-                await asyncio.sleep(0.01)
-    except Exception as e:
-        try:
-            await ws.send_json({"t": "out", "d": f"\nErro: {e}\n"})
-            await ws.send_json({"t": "end", "c": 1})
         except:
             pass
+
+        output_task.cancel()
+        container.reload()
+        exit_code = container.attrs["State"]["ExitCode"]
+        await ws.send_json({"t": "end", "c": exit_code})
+
+    except Exception as e:
+        await ws.send_json({"t": "out", "d": f"\nError: {e}\n"})
+        await ws.send_json({"t": "end", "c": 1})
     finally:
-        if pid:
+        if container:
             try:
-                os.kill(pid, signal.SIGKILL)
-                os.waitpid(pid, 0)
+                container.remove(force=True)
             except:
                 pass
-        if master_fd:
+        if os.path.exists(temp_dir):
             try:
-                os.close(master_fd)
-            except:
-                pass
-        if tmp and os.path.exists(tmp):
-            try:
-                os.remove(tmp)
+                shutil.rmtree(temp_dir)
             except:
                 pass
 
@@ -109,14 +133,14 @@ HTML = """<!DOCTYPE html>
 <title>PyLearn</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-html,body{height:100%;overflow:hidden;background:#000;font-family:monospace}
+html,body{height:100%;overflow:hidden;background:#1e1e1e;font-family:monospace}
 #editor-view,#terminal-view{position:absolute;top:0;left:0;right:0;bottom:0;display:flex;flex-direction:column}
 #terminal-view{display:none}
-#code{flex:1;width:100%;padding:10px;font-family:"Courier New",monospace;font-size:14px;line-height:1.4;background:#0a0a0a;color:#0f0;border:none;resize:none;outline:none}
-#run{padding:14px;font-size:16px;font-weight:bold;background:#0f0;color:#000;border:none;cursor:pointer}
-#terminal{flex:1;padding:10px;overflow-y:auto;font-family:"Courier New",monospace;font-size:14px;line-height:1.4;color:#0f0;white-space:pre-wrap;word-break:break-word;outline:none}
-#back{padding:12px;font-size:14px;font-weight:bold;background:#333;color:#0f0;border:none;cursor:pointer}
-.cursor{border-left:2px solid #0f0;animation:b 1s step-end infinite}
+#code{flex:1;width:100%;padding:15px;font-family:"Fira Code", "Courier New", monospace;font-size:14px;line-height:1.5;background:#1e1e1e;color:#d4d4d4;border:none;resize:none;outline:none}
+#run{padding:15px;font-size:16px;font-weight:bold;background:#007acc;color:#fff;border:none;cursor:pointer}
+#terminal{flex:1;padding:15px;overflow-y:auto;font-family:"Fira Code", "Courier New", monospace;font-size:14px;line-height:1.5;color:#fff;background:#000;white-space:pre-wrap;word-break:break-word;outline:none}
+#back{padding:12px;font-size:14px;font-weight:bold;background:#333;color:#fff;border:none;cursor:pointer}
+.cursor{display:inline-block;width:8px;height:1em;background:#fff;vertical-align:middle;animation:b 1s step-end infinite}
 @keyframes b{50%{opacity:0}}
 </style>
 </head>
@@ -124,21 +148,21 @@ html,body{height:100%;overflow:hidden;background:#000;font-family:monospace}
 
 <div id="editor-view">
 <textarea id="code" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off">nome = input("Nome: ")
-print("Ola", nome)
+print(f"Ola {nome}!")
 
 for i in range(3):
-    x = input("Numero: ")
-    print(x, "* 2 =", int(x)*2)</textarea>
+    x = input(f"Numero {i+1}: ")
+    print(f"Dobro: {int(x)*2}")</textarea>
 <button id="run" onclick="start()">▶ EXECUTAR</button>
 </div>
 
 <div id="terminal-view">
 <div id="terminal" tabindex="0"></div>
-<button id="back" onclick="back()">← VOLTAR</button>
+<button id="back" onclick="back()">← Voltar</button>
 </div>
 
 <script>
-var ws,term=document.getElementById("terminal");
+var ws, term=document.getElementById("terminal");
 
 function start(){
     var code=document.getElementById("code").value;
@@ -156,12 +180,71 @@ function start(){
     };
     ws.onmessage=function(e){
         var m=JSON.parse(e.data);
-        if(m.t==="out")append(m.d);
-        else if(m.t==="end"){append("\\n[exit "+m.c+"]");removeCursor();}
+        if(m.t==="out"){
+            processTermData(m.d);
+        }
+        else if(m.t==="end"){
+            append("\\n\\n[Exited with status "+m.c+"]");
+            removeCursor();
+            ws.close();
+        }
     };
-    ws.onerror=function(){append("\\n[erro]");removeCursor();};
-    ws.onclose=function(){removeCursor();};
+    ws.onerror=function(){append("\\n[Connection Error]");removeCursor();};
 }
+
+// --- NEW TERMINAL PARSER ---
+function processTermData(text) {
+    // 1. Remove carriage returns (\\r) to prevent overlapping lines
+    text = text.replace(/\\r/g, "");
+    
+    // 2. Iterate character by character
+    for (var i = 0; i < text.length; i++) {
+        var char = text[i];
+        
+        // Handle Backspace (\\b) or Delete (\\x7f)
+        if (char === "\\b" || char === "\\x08" || char === "\\x7f") {
+            removeLast();
+        } 
+        else {
+            appendChar(char);
+        }
+    }
+    // Scroll to bottom
+    term.scrollTop = term.scrollHeight;
+}
+
+function appendChar(char){
+    var c = document.getElementById("cur");
+    // Insert text BEFORE the cursor
+    c.parentNode.insertBefore(document.createTextNode(char), c);
+}
+
+function append(txt) {
+    // For bulk messages like errors
+    processTermData(txt);
+}
+
+function removeLast(){
+    var c = document.getElementById("cur");
+    // Look backwards for a text node
+    while (c.previousSibling) {
+        var node = c.previousSibling;
+        if (node.nodeType === 3) { // Text Node
+            if (node.length > 0) {
+                // Delete the last character of this node
+                node.deleteData(node.length - 1, 1);
+                return; 
+            } else {
+                // If node is empty, remove it and keep looking back
+                node.remove();
+            }
+        } else {
+            // Hit a non-text element (like a span?), stop.
+            return;
+        }
+    }
+}
+// ----------------------------
 
 function back(){
     if(ws){ws.close();ws=null;}
@@ -169,18 +252,10 @@ function back(){
     document.getElementById("editor-view").style.display="flex";
 }
 
-function append(txt){
-    removeCursor();
-    term.appendChild(document.createTextNode(txt));
-    addCursor();
-    term.scrollTop=term.scrollHeight;
-}
-
 function addCursor(){
     var c=document.createElement("span");
     c.className="cursor";
     c.id="cur";
-    c.innerHTML="&nbsp;";
     term.appendChild(c);
 }
 
@@ -189,16 +264,14 @@ function removeCursor(){
     if(c)c.remove();
 }
 
-function send(ch){
-    if(ws&&ws.readyState===1)ws.send(JSON.stringify({t:"in",d:ch}));
-}
-
 term.addEventListener("keydown",function(e){
+    if(!ws || ws.readyState!==1) return;
     e.preventDefault();
-    if(e.key==="Enter")send("\\n");
-    else if(e.key==="Backspace")send("\\x7f");
-    else if(e.key.length===1&&!e.ctrlKey&&!e.metaKey)send(e.key);
-    else if(e.ctrlKey&&e.key==="c")send("\\x03");
+    var key = e.key;
+    if(key==="Enter") ws.send(JSON.stringify({t:"in",d:"\\n"}));
+    else if(key==="Backspace") ws.send(JSON.stringify({t:"in",d:"\\x7f"}));
+    else if(key.length===1 && !e.ctrlKey && !e.metaKey) ws.send(JSON.stringify({t:"in",d:key}));
+    else if(e.ctrlKey && key==="c") ws.send(JSON.stringify({t:"in",d:"\\x03"}));
 });
 
 term.addEventListener("click",function(){term.focus();});
