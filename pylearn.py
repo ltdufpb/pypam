@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PyLearn - Final Production Version (Advanced Editor & Unified UI)
+PyLearn - Final Production Version (Advanced Editor & Fully Unified UI)
 """
 
 import os
@@ -173,10 +173,9 @@ async def run_code(ws: WebSocket):
             if not code:
                 return
 
-            safe_code = "import time; time.sleep(0.5)\n" + code
             script_path = os.path.join(temp_dir, "script.py")
             with open(script_path, "w", encoding="utf-8") as f:
-                f.write(safe_code)
+                f.write(code)
             os.chmod(script_path, 0o644)
 
             container = client.containers.create(
@@ -197,10 +196,10 @@ async def run_code(ws: WebSocket):
                 environment={"PYTHONIOENCODING": "utf-8", "PYTHON_COLORS": "0"},
             )
 
-            container.start()
             socket = container.attach_socket(
                 params={"stdin": 1, "stdout": 1, "stderr": 1, "stream": 1}
             )
+            container.start()
 
             async def forward_output():
                 nonlocal has_sent_output
@@ -307,6 +306,8 @@ input:focus { border-color:var(--primary);box-shadow:0 0 0 2px rgba(0,122,204,0.
 .btn-primary:hover { opacity:0.9; }
 .btn-success { background:var(--success);color:#fff; }
 .btn-success:hover { opacity:0.9; }
+.btn-danger { background:var(--danger);color:#fff; }
+.btn-danger:hover { opacity:0.9; }
 .btn-secondary { background:var(--secondary);color:var(--secondary-text); }
 .btn-secondary:hover { background:#dde1e3; }
 
