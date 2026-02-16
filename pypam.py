@@ -1,6 +1,73 @@
 #!/usr/bin/env python3
 """
-PyPAM - Editor Python Online do Prof. Alan Moraes
+PyPAM - Prof. Alan Moraes' Online Python Editor
+
+===============================================================================
+1. HIGH-LEVEL ARCHITECTURAL OVERVIEW
+===============================================================================
+PyPAM is built on a modern asynchronous stack designed for high concurrency 
+and security. The architecture follows a client-server model where the server 
+acts as a secure orchestrator between web clients and transient Docker 
+containers.
+
+Key Technologies:
+- Backend: FastAPI (Python 3.10+) utilizing ASGI for asynchronous I/O.
+- Execution: Docker Engine via the Docker SDK for Python.
+- Communication: WebSockets (PEP 3156) for low-latency terminal emulation.
+- Frontend: Vanilla JavaScript SPA with CodeMirror 5 for IDE-like features.
+
+Execution Lifecycle:
+1. Student writes code in the CodeMirror editor (Frontend).
+2. Code is transmitted via a persistent WebSocket connection.
+3. Server validates credentials and acquires an execution slot (Semaphore).
+4. Server scaffolds a unique temporary environment on the host filesystem.
+5. A Docker container is spawned with strict hardware and software isolation.
+6. Stdin/Stdout/Stderr are bridged between the container's TTY and the 
+   client's browser in real-time.
+7. Upon termination, the container and all temporary files are destroyed.
+
+===============================================================================
+2. SECURITY ARCHITECTURE (DEEP DIVE)
+===============================================================================
+Executing arbitrary user code is inherently dangerous. PyPAM implements 
+defense-in-depth through five distinct layers:
+
+Layer 1: User Authentication
+- Every execution request is verified against a local student database.
+- Active session tracking prevents resource exhaustion by limiting one 
+  concurrent execution per user.
+
+Layer 2: Network Isolation
+- Containers are created with 'network_disabled=True'.
+- This prevents the student's code from scanning the host network, 
+  accessing external APIs, or being used in botnets.
+
+Layer 3: Resource Constraints (Control Groups)
+- RAM is capped at 48MB. Exceeding this triggers the OOM killer.
+- CPU is throttled to 20% of a single core via 'nano_cpus'.
+- PID Limit (15) prevents 'fork bombs' (recursive process creation).
+
+Layer 4: Filesystem Hardening
+- The root filesystem is 'read_only=True'.
+- A 'tmpfs' is mounted at /tmp to allow small, non-persistent writes.
+- The user's script is mounted via a volume with limited permissions.
+- 'os.chmod' is used on the host to ensure the container user (nobody) can 
+  read the script but not interfere with other students' data.
+
+Layer 5: Process Privilege
+- The container process runs as UID 65534 (nobody). Even if a student 
+  escapes the Python interpreter, they lack root privileges to exploit 
+  kernel vulnerabilities or host filesystem mounts.
+
+===============================================================================
+3. LOW-LEVEL IMPLEMENTATION NOTES
+===============================================================================
+- Docker Socket: The server requires access to /var/run/docker.sock.
+- Asynchronous Bridge: The 'forward_output' inner function uses 
+  'run_in_executor' because the Docker SDK's socket.read() is a blocking 
+  operation that would otherwise stall the FastAPI event loop.
+- Terminal Proxy: Mobile keyboards often don't trigger on 'div' elements. 
+  The terminal uses a hidden 'input' element to proxy focus and keystrokes.
 """
 
 import os
@@ -11,20 +78,38 @@ import shutil
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import HTMLResponse
 
-# --- CONFIGURATION ---
+# --- CONFIGURATION & LIMITS ---
+# PORT: The port the FastAPI server will listen on.
 PORT = int(os.getenv("PORT", 8000))
+
+# DOCKER_IMAGE: A lightweight Python image. Alpine is used for fast startup.
 DOCKER_IMAGE = "python:3.14-alpine"
+
+# MAX_CONCURRENT_USERS: Max number of students running code at the same time.
+# This prevents the host from running out of file descriptors or memory.
 MAX_CONCURRENT_USERS = 10
+
+# MEM_LIMIT: Memory limit for the container (cgroups).
 MEM_LIMIT = "48m"
+
+# CPU_LIMIT_NANO: CPU limit in nanoseconds (0.20 = 20% of one core).
 CPU_LIMIT_NANO = int(0.20 * 1e9)
 
-# --- AUTHENTICATION ---
-ALLOWLIST_FILE = "students.txt"
-ADMIN_CREDS_FILE = "admin.txt"
+# --- AUTHENTICATION STATE ---
+ALLOWLIST_FILE = "students.txt" # Schema: username:password
+ADMIN_CREDS_FILE = "admin.txt"  # Schema: username:password
+
+# active_sessions: Thread-safe set (in async context) to prevent duplicate logins.
 active_sessions = set()
 
 
 def get_allowlist():
+    """
+    Parses the student credentials file.
+    
+    Returns:
+        dict: A mapping of {username: password}.
+    """
     if not os.path.exists(ALLOWLIST_FILE):
         return {}
     users = {}
@@ -38,12 +123,24 @@ def get_allowlist():
 
 
 def save_allowlist(users):
+    """
+    Persists the student credentials dictionary to the filesystem.
+    
+    Args:
+        users (dict): The mapping of {username: password} to save.
+    """
     with open(ALLOWLIST_FILE, "w") as f:
         for u, p in users.items():
             f.write(f"{u}:{p}\n")
 
 
 def get_admin_creds():
+    """
+    Parses the administrator credentials file.
+    
+    Returns:
+        tuple: (username, password). Defaults to ('admin', 'admin123').
+    """
     if not os.path.exists(ADMIN_CREDS_FILE):
         return "admin", "admin123"
     with open(ADMIN_CREDS_FILE, "r") as f:
@@ -53,23 +150,34 @@ def get_admin_creds():
     return "admin", "admin123"
 
 
+# --- DOCKER ENGINE CONNECTIVITY ---
 try:
+    # Connect to the local Docker daemon
     client = docker.from_env()
     try:
+        # Check if the desired image exists locally
         client.images.get(DOCKER_IMAGE)
     except docker.errors.ImageNotFound:
-        print(f"Pulling {DOCKER_IMAGE}...")
+        # Pull the image if it's missing (happens on first run)
+        print(f"Pulling image {DOCKER_IMAGE}...")
         client.images.pull(DOCKER_IMAGE)
 except Exception as e:
     print(f"CRITICAL ERROR: Docker is not ready.\n{e}")
     exit(1)
 
+# Initialize the semaphore to enforce the concurrency limit
 user_lock = asyncio.Semaphore(MAX_CONCURRENT_USERS)
 app = FastAPI()
 
 
 @app.post("/login")
 async def login(data: dict):
+    """
+    Endpoint for student authentication.
+    
+    Args:
+        data (dict): JSON containing 'username' and 'password'.
+    """
     username = (data.get("username") or "").strip()
     password = (data.get("password") or "").strip()
     users = get_allowlist()
@@ -80,6 +188,9 @@ async def login(data: dict):
 
 @app.post("/admin/login")
 async def admin_login(data: dict):
+    """
+    Endpoint for administrator authentication.
+    """
     u, p = get_admin_creds()
     if data.get("username") == u and data.get("password") == p:
         return {"success": True}
@@ -88,6 +199,9 @@ async def admin_login(data: dict):
 
 @app.post("/admin/get_users")
 async def get_users(data: dict):
+    """
+    Fetches the list of students. Passwords are excluded for security.
+    """
     u, p = get_admin_creds()
     if data.get("admin_u") != u or data.get("admin_p") != p:
         return {"success": False}
@@ -97,26 +211,32 @@ async def get_users(data: dict):
 
 @app.post("/admin/save_user")
 async def save_user(data: dict):
+    """
+    Updates an existing student or creates a new one.
+    Handles password resetting (blank password = no change).
+    """
     u, p = get_admin_creds()
     if data.get("admin_u") != u or data.get("admin_p") != p:
-        return {"success": False, "msg": "Acesso negado"}
+        return {"success": False, "msg": "Access denied"}
 
     new_u = (data.get("username") or "").strip()
     new_p = (data.get("password") or "").strip()
     old_u = (data.get("old_username") or "").strip()
 
     if not new_u or ":" in new_u:
-        return {"success": False, "msg": "Usuário inválido"}
+        return {"success": False, "msg": "Invalid username"}
 
     users = get_allowlist()
     if old_u and old_u in users:
+        # Edit existing student logic
         final_p = new_p if new_p else users[old_u]
         if old_u != new_u:
-            del users[old_u]
+            del users[old_u] # Handle username change
         users[new_u] = final_p
     else:
+        # New student logic
         if not new_p:
-            return {"success": False, "msg": "Senha obrigatória"}
+            return {"success": False, "msg": "Password required"}
         users[new_u] = new_p
 
     save_allowlist(users)
@@ -125,9 +245,12 @@ async def save_user(data: dict):
 
 @app.post("/admin/delete_user")
 async def delete_user(data: dict):
+    """
+    Deletes a student from the database.
+    """
     u, p = get_admin_creds()
     if data.get("admin_u") != u or data.get("admin_p") != p:
-        return {"success": False, "msg": "Acesso negado"}
+        return {"success": False, "msg": "Access denied"}
 
     target = (data.get("username") or "").strip()
     users = get_allowlist()
@@ -139,33 +262,47 @@ async def delete_user(data: dict):
 
 @app.websocket("/ws")
 async def run_code(ws: WebSocket):
+    """
+    Main execution hub. Manages the real-time bridge between the student and 
+    their isolated Python environment.
+    """
     await ws.accept()
+    
+    # Early capacity check
     if user_lock.locked():
-        await ws.send_json({"t": "out", "d": "\n[Servidor Ocupado]\n"})
+        await ws.send_json({"t": "out", "d": "\n[Server Busy] Please wait...\n"})
         await ws.send_json({"t": "end", "c": 1})
         await ws.close()
         return
 
     username = None
     users = get_allowlist()
+    
+    # Enter the semaphore context to reserve an execution slot
     async with user_lock:
         container = None
+        # Create a unique sandbox directory on the host
         temp_dir = tempfile.mkdtemp(prefix="pypam_")
+        # Grant read/execute permissions so the non-root container user can access it
         os.chmod(temp_dir, 0o755)
         has_sent_output = False
+        
         try:
+            # Protocol Start: Receive config and code from client
             data = await ws.receive_json()
             username = (data.get("username") or "").strip()
             password = (data.get("password") or "").strip()
             code = data.get("code", "")
 
+            # Security double-check: verify credentials again within the socket
             if username not in users or users[username] != password:
-                await ws.send_json({"t": "out", "d": "\n[Credenciais Inválidas]\n"})
+                await ws.send_json({"t": "out", "d": "\n[Access Denied] Invalid credentials.\n"})
                 await ws.send_json({"t": "end", "c": 1})
                 return
 
+            # Prevent concurrent sessions for the same user
             if username in active_sessions:
-                await ws.send_json({"t": "out", "d": "\n[Usuário já ativo]\n"})
+                await ws.send_json({"t": "out", "d": "\n[Access Denied] User already active.\n"})
                 await ws.send_json({"t": "end", "c": 1})
                 return
 
@@ -173,37 +310,43 @@ async def run_code(ws: WebSocket):
             if not code:
                 return
 
+            # Persist the student's code to the sandbox directory
             script_path = os.path.join(temp_dir, "script.py")
             with open(script_path, "w", encoding="utf-8") as f:
                 f.write(code)
             os.chmod(script_path, 0o644)
 
+            # Define the sandbox container
             container = client.containers.create(
                 DOCKER_IMAGE,
-                command=["python3", "-u", "/app/script.py"],
+                command=["python3", "-u", "/app/script.py"], # -u disables buffering
                 working_dir="/app",
-                stdin_open=True,
-                tty=True,
+                stdin_open=True, # Allow interactive input
+                tty=True,        # Allocate a pseudo-TTY for better interactive behavior
                 detach=True,
-                network_disabled=True,
-                mem_limit=MEM_LIMIT,
-                nano_cpus=CPU_LIMIT_NANO,
-                pids_limit=15,
-                read_only=True,
-                volumes={temp_dir: {"bind": "/app", "mode": "rw"}},
-                tmpfs={"/tmp": ""},
-                user="65534:65534",
+                network_disabled=True, # Isolation
+                mem_limit=MEM_LIMIT,   # RAM limit
+                nano_cpus=CPU_LIMIT_NANO, # CPU limit
+                pids_limit=15,         # Process limit
+                read_only=True,        # Protect root filesystem
+                volumes={temp_dir: {"bind": "/app", "mode": "rw"}}, # Mount student code
+                tmpfs={"/tmp": ""},    # Allow volatile writes in /tmp
+                user="65534:65534",    # Run as 'nobody' (unprivileged)
                 environment={"PYTHONIOENCODING": "utf-8", "PYTHON_COLORS": "0"},
             )
 
+            # IMPORTANT: We attach to the socket BEFORE starting the container.
+            # This ensures we don't miss the first few bytes of output.
             socket = container.attach_socket(params={"stdin": 1, "stdout": 1, "stderr": 1, "stream": 1})
             container.start()
 
+            # Background worker to pull data from Docker and push to Browser
             async def forward_output():
                 nonlocal has_sent_output
                 loop = asyncio.get_event_loop()
                 while True:
                     try:
+                        # run_in_executor prevents blocking the main event loop
                         data = await loop.run_in_executor(None, socket.read, 1024)
                         if not data: break
                         has_sent_output = True
@@ -211,34 +354,46 @@ async def run_code(ws: WebSocket):
                     except: break
 
             output_task = asyncio.create_task(forward_output())
+            
+            # Interactive loop: Wait for user input or container death
             try:
                 while True:
                     container.reload()
                     if container.status != "running": break
                     try:
+                        # Small timeout allows us to check 'container.status' periodically
                         msg = await asyncio.wait_for(ws.receive_json(), timeout=0.2)
                         if msg.get("t") == "in":
+                            # Forward browser keystrokes to the container's stdin
                             os.write(socket.fileno(), msg.get("d").encode())
                     except asyncio.TimeoutError: pass
                     except: break
             except: pass
 
+            # Cleanup output task
             try: await asyncio.wait_for(output_task, timeout=2.0)
             except: output_task.cancel()
 
             container.reload()
             exit_code = container.attrs["State"]["ExitCode"]
+            
+            # Error recovery: If no output was sent but exit code is non-zero,
+            # it's likely a Python compilation error or startup crash.
             if not has_sent_output and exit_code != 0:
                 try:
                     logs = container.logs().decode(errors="replace")
                     if logs: await ws.send_json({"t": "out", "d": logs})
                 except: pass
+            
             await ws.send_json({"t": "end", "c": exit_code})
+            
         except Exception as e:
-            await ws.send_json({"t": "out", "d": f"\nErro: {e}\n"})
+            await ws.send_json({"t": "out", "d": f"\nSystem Error: {e}\n"})
             await ws.send_json({"t": "end", "c": 1})
         finally:
-            if username and username in active_sessions: active_sessions.remove(username)
+            # RESOURCE CLEANUP (CRITICAL)
+            if username and username in active_sessions:
+                active_sessions.remove(username)
             if container:
                 try: container.remove(force=True)
                 except: pass
@@ -247,6 +402,9 @@ async def run_code(ws: WebSocket):
                 except: pass
 
 
+# --- FRONTEND TEMPLATES ---
+
+# SHARED_CSS: Visual identity of the app. Defined once to ensure consistency.
 SHARED_CSS = """
 :root {
     --primary: #007acc;
@@ -296,7 +454,7 @@ input:focus { border-color:var(--primary);box-shadow:0 0 0 2px rgba(0,122,204,0.
 .user-label { color:var(--secondary-text);font-weight:600;font-size:14px }
 .logout-btn { background:none;border:none;color:var(--secondary-text);cursor:pointer;font-size:18px;padding:4px;display:flex;align-items:center }
 
-/* CodeMirror VS Code Light Theme */
+/* CodeMirror Integration styles */
 .CodeMirror { height: 100%; font-family: "Fira Code", monospace; font-size: 14px; line-height: 1.6; background: #fff; }
 .CodeMirror-gutters { background: #f8f9fa; border-right: 1px solid #e5e7eb; }
 .CodeMirror-linenumber { color: #adb5bd; padding: 0 8px; }
@@ -310,33 +468,36 @@ input:focus { border-color:var(--primary);box-shadow:0 0 0 2px rgba(0,122,204,0.
 .cm-s-default .cm-operator { color: #333; }
 """
 
+# HTML snippet for the standardized login card
 LOGIN_BOX_TEMPLATE = """
     <div class="login-screen">
         <div class="login-box">
             <h2>{title}</h2>
-            <input type="text" id="username" name="username" placeholder="Usuário" autocomplete="username" autocapitalize="none" autocorrect="off" onkeydown="if(event.key==='Enter') {login_func}()"/>
-            <input type="password" id="password" name="password" placeholder="Senha" autocomplete="current-password" onkeydown="if(event.key==='Enter') {login_func}()"/>
-            <button class="btn btn-primary" onclick="{login_func}()">ENTRAR</button>
+            <input type="text" id="username" name="username" placeholder="Username" autocomplete="username" autocapitalize="none" autocorrect="off" onkeydown="if(event.key==='Enter') {login_func}()"/>
+            <input type="password" id="password" name="password" placeholder="Password" autocomplete="current-password" onkeydown="if(event.key==='Enter') {login_func}()"/>
+            <button class="btn btn-primary" onclick="{login_func}()">ENTER</button>
             <div id="error-msg" style="color:var(--danger);font-size:14px;margin-top:12px;height:1.4em;"></div>
         </div>
     </div>
 """
 
+# HTML snippet for the consistent app header
 HEADER_TEMPLATE = """
     <div class="app-header">
         <span class="user-display"></span>
-        <button class="logout-btn" title="Sair" onclick="doLogout()">
+        <button class="logout-btn" title="Logout" onclick="doLogout()">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
         </button>
     </div>
 """
 
+# --- MAIN STUDENT UI ---
 HTML = f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=yes">
-<title>PyPAM - Editor Python Online do Prof. Alan Moraes</title>
+<title>PyPAM - Prof. Alan Moraes' Online Python Editor</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.css">
 <style>
 {SHARED_CSS}
@@ -349,20 +510,21 @@ HTML = f"""<!DOCTYPE html>
 </head>
 <body>
 <div id="login-view" class="view-container">
-    {LOGIN_BOX_TEMPLATE.format(title="PyPAM - Acesso Estudante", login_func="doLogin")}
+    {LOGIN_BOX_TEMPLATE.format(title="Student Access", login_func="doLogin")}
 </div>
 <div id="editor-view" class="view-container">
     {HEADER_TEMPLATE}
     <div id="editor-container">
         <textarea id="code-editor"></textarea>
     </div>
-    <button id="run" class="btn btn-success" onclick="start()">▶ EXECUTAR</button>
+    <button id="run" class="btn btn-success" onclick="start()">▶ EXECUTE</button>
 </div>
 <div id="terminal-view" class="view-container">
     {HEADER_TEMPLATE}
     <div id="terminal" tabindex="0"></div>
+    <!-- The hidden input below triggers the mobile keyboard and captures data for the terminal -->
     <input type="text" id="term-input" style="position:absolute; opacity:0; pointer-events:none; left:-9999px;" autocapitalize="none" autocorrect="off" autocomplete="off" spellcheck="false">
-    <button id="back" class="btn btn-secondary" onclick="back()">← Voltar</button>
+    <button id="back" class="btn btn-secondary" onclick="back()">← Back</button>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.js"></script>
@@ -370,6 +532,7 @@ HTML = f"""<!DOCTYPE html>
 <script>
 var ws, term=document.getElementById("terminal"), termInput=document.getElementById("term-input"), editor;
 
+// Initialize CodeMirror with Python mode and mobile-aware input style
 editor = CodeMirror.fromTextArea(document.getElementById("code-editor"), {{
     mode: "python",
     lineNumbers: true,
@@ -377,7 +540,7 @@ editor = CodeMirror.fromTextArea(document.getElementById("code-editor"), {{
     smartIndent: true,
     tabSize: 4,
     indentWithTabs: false,
-    inputStyle: "contenteditable",
+    inputStyle: "contenteditable", // contenteditable handles line breaks better on Android/SwiftKey
     extraKeys: {{"Tab": function(cm) {{ cm.replaceSelection("    ", "end"); }} }},
     viewportMargin: Infinity,
     autocapitalize: false,
@@ -390,13 +553,18 @@ function showView(id) {{
     var target = document.getElementById(id);
     target.style.display = "flex";
     var u = localStorage.getItem("pypam_u");
+    // Update all username labels in headers
     if(u) {{ target.querySelectorAll(".user-display").forEach(el => el.innerText = u); }}
+    // CodeMirror needs a refresh if it was initialized while hidden
     if(id === "editor-view") setTimeout(() => editor.refresh(), 10);
+    // Focus terminal proxy on mobile
     if(id === "terminal-view") setTimeout(() => termInput.focus(), 50);
 }}
 
+// Clicking the terminal area focuses the hidden input to show the keyboard
 term.onclick = () => termInput.focus();
 
+// Terminal Input Logic: Maps standard keyboard events to TTY control characters
 termInput.onkeydown = (e) => {{
     if(!ws || ws.readyState!==1) return;
     if(e.key === "Enter") ws.send(JSON.stringify({{t:"in",d:"\\n"}}));
@@ -405,13 +573,13 @@ termInput.onkeydown = (e) => {{
     else if(e.key.length === 1 && !e.ctrlKey && !e.metaKey) ws.send(JSON.stringify({{t:"in",d:e.key}}));
 }};
 
-// Handle mobile composition/input
+// Handles characters sent by mobile predictive text/autocorrect
 termInput.oninput = (e) => {{
     if(!ws || ws.readyState!==1) return;
     if(e.inputType === "insertText" && e.data) {{
         ws.send(JSON.stringify({{t:"in", d:e.data}}));
     }}
-    termInput.value = "";
+    termInput.value = ""; // Clear proxy immediately
 }};
 
 async function doLogin() {{
@@ -420,22 +588,26 @@ async function doLogin() {{
     if(!u || !p) return;
     try {{
         var res = await fetch("/login", {{
-            method: "POST", headers: {{"Content-Type": "application/json"}},
+            method: "POST",
+            headers: {{"Content-Type": "application/json"}},
             body: JSON.stringify({{username: u, password: p}})
         }});
         var data = await res.json();
         if(data.success) {{
+            // Persist credentials locally for session maintenance
             localStorage.setItem("pypam_u", u);
             localStorage.setItem("pypam_p", p);
             initApp();
-        }} else {{ document.getElementById("error-msg").innerText = "Usuário ou senha incorretos."; }}
-    }} catch(e) {{ document.getElementById("error-msg").innerText = "Erro ao conectar."; }}
+        }} else {{ document.getElementById("error-msg").innerText = "Invalid username or password."; }}
+    }} catch(e) {{ document.getElementById("error-msg").innerText = "Connection error."; }}
 }}
+
 function doLogout() {{
     localStorage.removeItem("pypam_u");
     localStorage.removeItem("pypam_p");
     initApp();
 }}
+
 function initApp() {{
     var u = localStorage.getItem("pypam_u"), p = localStorage.getItem("pypam_p");
     if(u && p) {{ showView("editor-view"); }}
@@ -445,53 +617,87 @@ function initApp() {{
         showView("login-view"); 
     }}
 }}
+
 function start(){{
     var code = editor.getValue();
     var u=localStorage.getItem("pypam_u"), p=localStorage.getItem("pypam_p");
     showView("terminal-view");
     term.innerHTML=""; term.focus();
+    
     var proto=location.protocol==="https:"?"wss:":"ws:";
     ws=new WebSocket(proto+"//"+location.host+"/ws");
-    ws.onopen=function(){{ addCursor(); ws.send(JSON.stringify({{code:code, username:u, password:p}})); }};
+    
+    ws.onopen=function(){{ 
+        addCursor(); 
+        ws.send(JSON.stringify({{code:code, username:u, password:p}})); 
+    }};
+    
     ws.onmessage=function(e){{
         var m=JSON.parse(e.data);
         if(m.t==="out") processTermData(m.d);
-        else if(m.t==="end"){{ append("\\n\\n[Status: "+m.c+"]"); removeCursor(); ws.close(); }}
+        else if(m.t==="end"){{ 
+            append("\\n\\n[Status: "+m.c+"]"); 
+            removeCursor(); 
+            ws.close(); 
+        }}
     }};
 }}
+
+// Process terminal output, manually handling backspace characters
 function processTermData(text) {{
     text = text.replace(/\\r/g, "");
     for (var i = 0; i < text.length; i++) {{
         var char = text[i];
-        if (char === "\\b" || char === "\\x08" || char === "\\x7f") {{ removeLast(); }} else {{ appendChar(char); }}
+        if (char === "\\b" || char === "\\x08" || char === "\\x7f") {{ removeLast(); }} 
+        else {{ appendChar(char); }}
     }}
     term.scrollTop = term.scrollHeight;
 }}
-function appendChar(char){{ var c = document.getElementById("cur"); c.parentNode.insertBefore(document.createTextNode(char), c); }}
+
+function appendChar(char){{ 
+    var c = document.getElementById("cur"); 
+    c.parentNode.insertBefore(document.createTextNode(char), c); 
+}}
+
 function append(txt) {{ processTermData(txt); }}
+
 function removeLast(){{
     var c = document.getElementById("cur");
     while (c.previousSibling) {{
         var node = c.previousSibling;
         if (node.nodeType === 3) {{ 
-            if (node.length > 0) {{ node.deleteData(node.length - 1, 1); return; }} else {{ node.remove(); }}
+            if (node.length > 0) {{ node.deleteData(node.length - 1, 1); return; }} 
+            else {{ node.remove(); }}
         }} else {{ return; }}
     }}
 }}
+
 function back(){{ if(ws){{ws.close();ws=null;}} showView("editor-view"); }}
-function addCursor(){{ var c=document.createElement("span"); c.className="cursor"; c.id="cur"; term.appendChild(c); }}
-function removeCursor(){{ var c=document.getElementById("cur"); if(c)c.remove(); }}
+
+function addCursor(){{ 
+    var c=document.createElement("span"); 
+    c.className="cursor"; 
+    c.id="cur"; 
+    term.appendChild(c); 
+}}
+
+function removeCursor(){{ 
+    var c=document.getElementById("cur"); 
+    if(c)c.remove(); 
+}}
+
 initApp();
 </script>
 </body>
 </html>"""
 
+# --- ADMIN UI ---
 ADMIN_HTML = f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=yes">
-<title>PyPAM Admin - Editor Python Online do Prof. Alan Moraes</title>
+<title>PyPAM Admin - Prof. Alan Moraes' Online Python Editor</title>
 <style>
 {SHARED_CSS}
 body{{overflow-y:auto;}}
@@ -512,27 +718,28 @@ header {{ display:flex;justify-content:space-between;align-items:center;margin-b
 
     <div id="container" style="display:none">
         <header>
-            <h2 style="font-size:20px">Estudantes</h2>
-            <button class="btn btn-success" onclick="openModal()">+ NOVO</button>
+            <h2 style="font-size:20px">Students</h2>
+            <button class="btn btn-success" onclick="openModal()">+ NEW</button>
         </header>
         <div id="user-list"></div>
     </div>
 
     <div id="modal">
         <div id="modal-box">
-            <h3 id="modal-title" style="margin-bottom:16px">Novo Estudante</h3>
+            <h3 id="modal-title" style="margin-bottom:16px">New Student</h3>
             <p id="modal-desc" style="color:var(--secondary-text);font-size:14px;margin-bottom:16px"></p>
-            <input type="text" id="m_u" class="modal-input" placeholder="Usuário" autocomplete="username" />
-            <input type="password" id="m_p" class="modal-input" placeholder="Senha" autocomplete="new-password" />
+            <input type="text" id="m_u" class="modal-input" placeholder="Username" autocomplete="username" />
+            <input type="password" id="m_p" class="modal-input" placeholder="Password" autocomplete="new-password" />
             <div style="display:flex;gap:10px;margin-top:10px">
-                <button class="btn btn-secondary" style="flex:1" onclick="closeModal()">CANCELAR</button>
-                <button class="btn btn-primary" style="flex:1" onclick="handleModalSave()">SALVAR</button>
+                <button class="btn btn-secondary" style="flex:1" onclick="closeModal()">CANCEL</button>
+                <button class="btn btn-primary" style="flex:1" onclick="handleModalSave()">SAVE</button>
             </div>
         </div>
     </div>
 
 <script>
 var admin_u, admin_p, editing_u = null;
+
 async function doAdminLogin() {{
     var u = document.getElementById("username").value, p = document.getElementById("password").value;
     var res = await fetch("/admin/login", {{
@@ -545,16 +752,19 @@ async function doAdminLogin() {{
         document.getElementById("admin-login").style.display = "none";
         document.getElementById("container").style.display = "block";
         loadUsers();
-    }} else document.getElementById("error-msg").innerText = "Inválido.";
+    }} else document.getElementById("error-msg").innerText = "Invalid admin.";
 }}
+
 async function loadUsers() {{
     var res = await fetch("/admin/get_users", {{
-        method: "POST", headers: {{"Content-Type": "application/json"}},
-        body: JSON.stringify({{admin_u, admin_p}})
+        method: "POST", 
+        headers: {{"Content-Type": "application/json"}},
+        body: JSON.stringify({{admin_u: admin_u, admin_p: admin_p}})
     }});
     var data = await res.json();
     if(data.success) renderUsers(data.users);
 }}
+
 function renderUsers(users) {{
     var list = document.getElementById("user-list");
     list.innerHTML = "";
@@ -564,46 +774,54 @@ function renderUsers(users) {{
         div.innerHTML = `
             <div class="user-info">${{u}}</div>
             <div class="user-actions">
-                <button class="btn btn-primary" style="padding:8px 12px" onclick="openModal('${{u}}')">Editar</button>
+                <button class="btn btn-primary" style="padding:8px 12px" onclick="openModal('${{u}}')">Edit</button>
                 <button class="btn btn-danger" style="padding:8px 12px" onclick="deleteUser('${{u}}')">✕</button>
             </div>
         `;
         list.appendChild(div);
     }});
 }}
+
 function openModal(u = null) {{
     editing_u = u;
     document.getElementById("modal").style.display = "flex";
     document.getElementById("m_u").value = u || "";
     document.getElementById("m_p").value = "";
     if(u) {{
-        document.getElementById("modal-title").innerText = "Editar Aluno";
-        document.getElementById("modal-desc").innerText = "Deixe a senha em branco para manter a atual.";
+        document.getElementById("modal-title").innerText = "Edit Student";
+        document.getElementById("modal-desc").innerText = "Leave password blank to keep the current one.";
     }} else {{
-        document.getElementById("modal-title").innerText = "Novo Aluno";
-        document.getElementById("modal-desc").innerText = "Admin: entregue o aparelho ao aluno.";
+        document.getElementById("modal-title").innerText = "New Student";
+        document.getElementById("modal-desc").innerText = "Admin: hand over the device to the student.";
     }}
 }}
+
 function closeModal() {{ document.getElementById("modal").style.display = "none"; }}
+
 async function handleModalSave() {{
     var u = document.getElementById("m_u").value.trim(), p = document.getElementById("m_p").value.trim();
     if(!u || (!editing_u && !p)) return;
     var res = await fetch("/admin/save_user", {{
-        method: "POST", headers: {{"Content-Type": "application/json"}},
-        body: JSON.stringify({{admin_u, admin_p, old_username: editing_u, username: u, password: p}})
+        method: "POST", 
+        headers: {{"Content-Type": "application/json"}},
+        body: JSON.stringify({{admin_u: admin_u, admin_p: admin_p, old_username: editing_u, username: u, password: p}})
     }});
     var data = await res.json();
     if(data.success) {{ closeModal(); loadUsers(); }} else alert(data.msg);
 }}
+
 async function deleteUser(u) {{
-    if(confirm("Excluir " + u + "?")) {{
+    if(confirm("Delete " + u + "?")) {{
         await fetch("/admin/delete_user", {{
-            method: "POST", headers: {{"Content-Type": "application/json"}},
-            body: JSON.stringify({{admin_u, admin_p, username: u}})
+            method: "POST", 
+            headers: {{"Content-Type": "application/json"}},
+            body: JSON.stringify({{admin_u: admin_u, admin_p: admin_p, username: u}})
         }});
         loadUsers();
     }}
 }}
+
+// Reveal the login screen on load
 document.getElementById("admin-login").style.display = "flex";
 </script>
 </body>
@@ -622,5 +840,5 @@ def admin():
 
 if __name__ == "__main__":
     import uvicorn
-
+    # Start the production server on all interfaces
     uvicorn.run(app, host="0.0.0.0", port=PORT)
