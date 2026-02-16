@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PyLearn - Final Production Version (Fully Unified UI)
+PyLearn - Final Production Version (Advanced Editor & Unified UI)
 """
 
 import os
@@ -115,7 +115,8 @@ async def save_user(data: dict):
             del users[old_u]
         users[new_u] = final_p
     else:
-        if not new_p: return {"success": False, "msg": "Senha obrigatória"}
+        if not new_p:
+            return {"success": False, "msg": "Senha obrigatória"}
         users[new_u] = new_p
 
     save_allowlist(users)
@@ -169,7 +170,8 @@ async def run_code(ws: WebSocket):
                 return
 
             active_sessions.add(username)
-            if not code: return
+            if not code:
+                return
 
             safe_code = "import time; time.sleep(0.5)\n" + code
             script_path = os.path.join(temp_dir, "script.py")
@@ -196,7 +198,9 @@ async def run_code(ws: WebSocket):
             )
 
             container.start()
-            socket = container.attach_socket(params={"stdin": 1, "stdout": 1, "stderr": 1, "stream": 1})
+            socket = container.attach_socket(
+                params={"stdin": 1, "stdout": 1, "stderr": 1, "stream": 1}
+            )
 
             async def forward_output():
                 nonlocal has_sent_output
@@ -204,46 +208,63 @@ async def run_code(ws: WebSocket):
                 while True:
                     try:
                         data = await loop.run_in_executor(None, socket.read, 1024)
-                        if not data: break
+                        if not data:
+                            break
                         has_sent_output = True
-                        await ws.send_json({"t": "out", "d": data.decode(errors="replace")})
-                    except: break
+                        await ws.send_json(
+                            {"t": "out", "d": data.decode(errors="replace")}
+                        )
+                    except:
+                        break
 
             output_task = asyncio.create_task(forward_output())
             try:
                 while True:
                     container.reload()
-                    if container.status != "running": break
+                    if container.status != "running":
+                        break
                     try:
                         msg = await asyncio.wait_for(ws.receive_json(), timeout=0.2)
                         if msg.get("t") == "in":
                             os.write(socket.fileno(), msg.get("d").encode())
-                    except asyncio.TimeoutError: pass
-                    except: break
-            except: pass
+                    except asyncio.TimeoutError:
+                        pass
+                    except:
+                        break
+            except:
+                pass
 
-            try: await asyncio.wait_for(output_task, timeout=2.0)
-            except: output_task.cancel()
+            try:
+                await asyncio.wait_for(output_task, timeout=2.0)
+            except:
+                output_task.cancel()
 
             container.reload()
             exit_code = container.attrs["State"]["ExitCode"]
             if not has_sent_output and exit_code != 0:
                 try:
                     logs = container.logs().decode(errors="replace")
-                    if logs: await ws.send_json({"t": "out", "d": logs})
-                except: pass
+                    if logs:
+                        await ws.send_json({"t": "out", "d": logs})
+                except:
+                    pass
             await ws.send_json({"t": "end", "c": exit_code})
         except Exception as e:
             await ws.send_json({"t": "out", "d": f"\nErro: {e}\n"})
             await ws.send_json({"t": "end", "c": 1})
         finally:
-            if username and username in active_sessions: active_sessions.remove(username)
+            if username and username in active_sessions:
+                active_sessions.remove(username)
             if container:
-                try: container.remove(force=True)
-                except: pass
+                try:
+                    container.remove(force=True)
+                except:
+                    pass
             if os.path.exists(temp_dir):
-                try: shutil.rmtree(temp_dir)
-                except: pass
+                try:
+                    shutil.rmtree(temp_dir)
+                except:
+                    pass
 
 
 SHARED_CSS = """
@@ -286,22 +307,19 @@ input:focus { border-color:var(--primary);box-shadow:0 0 0 2px rgba(0,122,204,0.
 .btn-primary:hover { opacity:0.9; }
 .btn-success { background:var(--success);color:#fff; }
 .btn-success:hover { opacity:0.9; }
-.btn-danger { background:var(--danger);color:#fff; }
-.btn-danger:hover { opacity:0.9; }
 .btn-secondary { background:var(--secondary);color:var(--secondary-text); }
 .btn-secondary:hover { background:#dde1e3; }
 
 .app-header { display:flex;justify-content:space-between;align-items:center;padding:10px 15px;background:var(--secondary);border-bottom:1px solid var(--border) }
-.user-display { color:var(--secondary-text);font-weight:600;font-size:14px }
+.user-label { color:var(--secondary-text);font-weight:600;font-size:14px }
 .logout-btn { background:none;border:none;color:var(--secondary-text);cursor:pointer;font-size:18px;padding:4px;display:flex;align-items:center }
 """
 
-# We don't use f-string for templates to avoid brace escaping hell
 LOGIN_BOX_TEMPLATE = """
     <div class="login-screen">
         <div class="login-box">
             <h2>{title}</h2>
-            <input type="text" id="username" name="username" placeholder="Usuário" autocomplete="username" onkeydown="if(event.key==='Enter') {login_func}()"/>
+            <input type="text" id="username" name="username" placeholder="Usuário" autocomplete="username" autocapitalize="none" autocorrect="off" onkeydown="if(event.key==='Enter') {login_func}()"/>
             <input type="password" id="password" name="password" placeholder="Senha" autocomplete="current-password" onkeydown="if(event.key==='Enter') {login_func}()"/>
             <button class="btn btn-primary" onclick="{login_func}()">ENTRAR</button>
             <div id="error-msg" style="color:var(--danger);font-size:14px;margin-top:12px;height:1.4em;"></div>
@@ -326,11 +344,22 @@ HTML = f"""<!DOCTYPE html>
 <title>PyLearn</title>
 <style>
 {SHARED_CSS}
-#code{{flex:1;width:100%;padding:20px;font-family:"Fira Code",monospace;font-size:14px;line-height:1.6;background:#fff;color:var(--text);border:none;resize:none;outline:none;border-bottom:1px solid #e5e7eb}}
-#terminal{{flex:1;padding:20px;overflow-y:auto;font-family:"Fira Code",monospace;font-size:14px;line-height:1.6;color:#333;background:#f9fafb;white-space:pre-wrap;word-break:break-word;outline:none}}
+#editor-container {{ flex:1; display:flex; background:#fff; overflow:hidden; }}
+#line-numbers {{ 
+    width:40px; padding:20px 0; background:#f8f9fa; border-right:1px solid #e5e7eb; 
+    color:#adb5bd; font-family:"Fira Code",monospace; font-size:14px; line-height:1.6; 
+    text-align:right; padding-right:8px; user-select:none; overflow:hidden;
+}}
+#code {{ 
+    flex:1; padding:20px; font-family:"Fira Code",monospace; font-size:14px; 
+    line-height:1.6; background:#fff; color:var(--text); border:none; resize:none; 
+    outline:none; white-space:pre; overflow-wrap:normal; overflow-x:auto;
+}}
+#terminal{{flex:1;padding:20px;font-family:"Fira Code",monospace;font-size:14px;line-height:1.6;color:#333;background:#f9fafb;white-space:pre-wrap;word-break:break-word;outline:none;overflow-y:auto;}}
 #run, #back {{ width:100%; border-radius:0; margin:0; padding:16px; font-size:16px; }}
 .cursor{{display:inline-block;width:8px;height:1.2em;background:#333;vertical-align:middle;animation:b 1s step-end infinite}}
 @keyframes b{{50%{{opacity:0}}}}
+#error-msg {{ color:var(--danger);font-size:14px;margin-top:12px;height:1.4em; }}
 </style>
 </head>
 <body>
@@ -339,7 +368,10 @@ HTML = f"""<!DOCTYPE html>
 </div>
 <div id="editor-view" class="view-container">
     {HEADER_TEMPLATE}
-    <textarea id="code" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" placeholder="Escreva seu código Python aqui..."></textarea>
+    <div id="editor-container">
+        <div id="line-numbers">1</div>
+        <textarea id="code" spellcheck="false" autocapitalize="none" autocomplete="off" autocorrect="off" placeholder="Escreva seu código Python aqui..."></textarea>
+    </div>
     <button id="run" class="btn btn-success" onclick="start()">▶ EXECUTAR</button>
 </div>
 <div id="terminal-view" class="view-container">
@@ -348,14 +380,56 @@ HTML = f"""<!DOCTYPE html>
     <button id="back" class="btn btn-secondary" onclick="back()">← Voltar</button>
 </div>
 <script>
-var ws, term=document.getElementById("terminal");
+var ws, term=document.getElementById("terminal"), codeArea=document.getElementById("code"), lineNums=document.getElementById("line-numbers");
+
+function updateLineNumbers() {{
+    const lines = codeArea.value.split("\\n").length;
+    let html = "";
+    for(let i=1; i<=lines; i++) html += i + "<br>";
+    lineNums.innerHTML = html;
+}}
+
+codeArea.addEventListener("input", updateLineNumbers);
+codeArea.addEventListener("scroll", () => {{
+    lineNums.scrollTop = codeArea.scrollTop;
+}});
+
+codeArea.addEventListener("keydown", function(e) {{
+    if(e.key === "Enter") {{
+        const start = this.selectionStart;
+        const end = this.selectionEnd;
+        const text = this.value;
+        const before = text.substring(0, start);
+        const lines = before.split("\\n");
+        const currentLine = lines[lines.length - 1];
+        const match = currentLine.match(/^\\s*/);
+        const indent = match ? match[0] : "";
+        const extraIndent = currentLine.trim().endsWith(":") ? "    " : "";
+        
+        e.preventDefault();
+        const insert = "\\n" + indent + extraIndent;
+        this.value = text.substring(0, start) + insert + text.substring(end);
+        this.selectionStart = this.selectionEnd = start + insert.length;
+        updateLineNumbers();
+    }}
+    if(e.key === "Tab") {{
+        e.preventDefault();
+        const start = this.selectionStart;
+        const end = this.selectionEnd;
+        this.value = this.value.substring(0, start) + "    " + this.value.substring(end);
+        this.selectionStart = this.selectionEnd = start + 4;
+    }}
+}});
+
 function showView(id) {{
     document.querySelectorAll(".view-container").forEach(d => d.style.display = "none");
     var target = document.getElementById(id);
     target.style.display = "flex";
     var u = localStorage.getItem("pylearn_u");
     if(u) {{ target.querySelectorAll(".user-display").forEach(el => el.innerText = u); }}
+    if(id === "editor-view") updateLineNumbers();
 }}
+
 async function doLogin() {{
     var u = document.getElementById("username").value.trim();
     var p = document.getElementById("password").value.trim();
@@ -384,7 +458,7 @@ function initApp() {{
     else {{ document.getElementById("username").value = ""; document.getElementById("password").value = ""; showView("login-view"); }}
 }}
 function start(){{
-    var code=document.getElementById("code").value;
+    var code=codeArea.value;
     var u=localStorage.getItem("pylearn_u"), p=localStorage.getItem("pylearn_p");
     showView("terminal-view");
     term.innerHTML=""; term.focus();
@@ -469,7 +543,7 @@ header {{ display:flex;justify-content:space-between;align-items:center;margin-b
         <div id="modal-box">
             <h3 id="modal-title" style="margin-bottom:16px">Novo Estudante</h3>
             <p id="modal-desc" style="color:var(--secondary-text);font-size:14px;margin-bottom:16px"></p>
-            <input type="text" id="m_u" class="modal-input" placeholder="Usuário" autocomplete="username" />
+            <input type="text" id="m_u" class="modal-input" placeholder="Usuário" autocomplete="username" autocapitalize="none" autocorrect="off" />
             <input type="password" id="m_p" class="modal-input" placeholder="Senha" autocomplete="new-password" />
             <div style="display:flex;gap:10px;margin-top:10px">
                 <button class="btn btn-secondary" style="flex:1" onclick="closeModal()">CANCELAR</button>
@@ -569,4 +643,5 @@ def admin():
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=PORT)
