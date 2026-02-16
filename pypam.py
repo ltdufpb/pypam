@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PyLearn - Final Production Version (Mobile Keyboard Fix & Unified UI)
+PyPAM - Editor Python Online do Prof. Alan Moraes
 """
 
 import os
@@ -19,7 +19,7 @@ MEM_LIMIT = "48m"
 CPU_LIMIT_NANO = int(0.20 * 1e9)
 
 # --- AUTHENTICATION ---
-ALLOWLIST_FILE = "allowlist.txt"
+ALLOWLIST_FILE = "students.txt"
 ADMIN_CREDS_FILE = "admin.txt"
 active_sessions = set()
 
@@ -150,7 +150,7 @@ async def run_code(ws: WebSocket):
     users = get_allowlist()
     async with user_lock:
         container = None
-        temp_dir = tempfile.mkdtemp(prefix="pylearn_")
+        temp_dir = tempfile.mkdtemp(prefix="pypam_")
         os.chmod(temp_dir, 0o755)
         has_sent_output = False
         try:
@@ -196,9 +196,7 @@ async def run_code(ws: WebSocket):
                 environment={"PYTHONIOENCODING": "utf-8", "PYTHON_COLORS": "0"},
             )
 
-            socket = container.attach_socket(
-                params={"stdin": 1, "stdout": 1, "stderr": 1, "stream": 1}
-            )
+            socket = container.attach_socket(params={"stdin": 1, "stdout": 1, "stderr": 1, "stream": 1})
             container.start()
 
             async def forward_output():
@@ -207,63 +205,46 @@ async def run_code(ws: WebSocket):
                 while True:
                     try:
                         data = await loop.run_in_executor(None, socket.read, 1024)
-                        if not data:
-                            break
+                        if not data: break
                         has_sent_output = True
-                        await ws.send_json(
-                            {"t": "out", "d": data.decode(errors="replace")}
-                        )
-                    except:
-                        break
+                        await ws.send_json({"t": "out", "d": data.decode(errors="replace")})
+                    except: break
 
             output_task = asyncio.create_task(forward_output())
             try:
                 while True:
                     container.reload()
-                    if container.status != "running":
-                        break
+                    if container.status != "running": break
                     try:
                         msg = await asyncio.wait_for(ws.receive_json(), timeout=0.2)
                         if msg.get("t") == "in":
                             os.write(socket.fileno(), msg.get("d").encode())
-                    except asyncio.TimeoutError:
-                        pass
-                    except:
-                        break
-            except:
-                pass
+                    except asyncio.TimeoutError: pass
+                    except: break
+            except: pass
 
-            try:
-                await asyncio.wait_for(output_task, timeout=2.0)
-            except:
-                output_task.cancel()
+            try: await asyncio.wait_for(output_task, timeout=2.0)
+            except: output_task.cancel()
 
             container.reload()
             exit_code = container.attrs["State"]["ExitCode"]
             if not has_sent_output and exit_code != 0:
                 try:
                     logs = container.logs().decode(errors="replace")
-                    if logs:
-                        await ws.send_json({"t": "out", "d": logs})
-                except:
-                    pass
+                    if logs: await ws.send_json({"t": "out", "d": logs})
+                except: pass
             await ws.send_json({"t": "end", "c": exit_code})
         except Exception as e:
             await ws.send_json({"t": "out", "d": f"\nErro: {e}\n"})
             await ws.send_json({"t": "end", "c": 1})
         finally:
-            if username and username in active_sessions:
-                active_sessions.remove(username)
+            if username and username in active_sessions: active_sessions.remove(username)
             if container:
-                try:
-                    container.remove(force=True)
-                except:
-                    pass
+                try: container.remove(force=True)
+                except: pass
             if os.path.exists(temp_dir):
-                try:
-                    shutil.rmtree(temp_dir)
-                except:
-                    pass
+                try: shutil.rmtree(temp_dir)
+                except: pass
 
 
 SHARED_CSS = """
@@ -355,7 +336,7 @@ HTML = f"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=yes">
-<title>PyLearn</title>
+<title>PyPAM - Editor Python Online do Prof. Alan Moraes</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.css">
 <style>
 {SHARED_CSS}
@@ -368,7 +349,7 @@ HTML = f"""<!DOCTYPE html>
 </head>
 <body>
 <div id="login-view" class="view-container">
-    {LOGIN_BOX_TEMPLATE.format(title="Acesso Estudante", login_func="doLogin")}
+    {LOGIN_BOX_TEMPLATE.format(title="PyPAM - Acesso Estudante", login_func="doLogin")}
 </div>
 <div id="editor-view" class="view-container">
     {HEADER_TEMPLATE}
@@ -396,7 +377,8 @@ editor = CodeMirror.fromTextArea(document.getElementById("code-editor"), {{
     smartIndent: true,
     tabSize: 4,
     indentWithTabs: false,
-    extraKeys: {{"Tab": function(cm) {{ cm.replaceSelection("    ", "end"); }}}},
+    inputStyle: "contenteditable",
+    extraKeys: {{"Tab": function(cm) {{ cm.replaceSelection("    ", "end"); }} }},
     viewportMargin: Infinity,
     autocapitalize: false,
     spellcheck: false,
@@ -407,7 +389,7 @@ function showView(id) {{
     document.querySelectorAll(".view-container").forEach(d => d.style.display = "none");
     var target = document.getElementById(id);
     target.style.display = "flex";
-    var u = localStorage.getItem("pylearn_u");
+    var u = localStorage.getItem("pypam_u");
     if(u) {{ target.querySelectorAll(".user-display").forEach(el => el.innerText = u); }}
     if(id === "editor-view") setTimeout(() => editor.refresh(), 10);
     if(id === "terminal-view") setTimeout(() => termInput.focus(), 50);
@@ -438,25 +420,24 @@ async function doLogin() {{
     if(!u || !p) return;
     try {{
         var res = await fetch("/login", {{
-            method: "POST",
-            headers: {{"Content-Type": "application/json"}},
+            method: "POST", headers: {{"Content-Type": "application/json"}},
             body: JSON.stringify({{username: u, password: p}})
         }});
         var data = await res.json();
         if(data.success) {{
-            localStorage.setItem("pylearn_u", u);
-            localStorage.setItem("pylearn_p", p);
+            localStorage.setItem("pypam_u", u);
+            localStorage.setItem("pypam_p", p);
             initApp();
         }} else {{ document.getElementById("error-msg").innerText = "Usuário ou senha incorretos."; }}
     }} catch(e) {{ document.getElementById("error-msg").innerText = "Erro ao conectar."; }}
 }}
 function doLogout() {{
-    localStorage.removeItem("pylearn_u");
-    localStorage.removeItem("pylearn_p");
+    localStorage.removeItem("pypam_u");
+    localStorage.removeItem("pypam_p");
     initApp();
 }}
 function initApp() {{
-    var u = localStorage.getItem("pylearn_u"), p = localStorage.getItem("pylearn_p");
+    var u = localStorage.getItem("pypam_u"), p = localStorage.getItem("pypam_p");
     if(u && p) {{ showView("editor-view"); }}
     else {{ 
         document.getElementById("username").value = ""; 
@@ -466,7 +447,7 @@ function initApp() {{
 }}
 function start(){{
     var code = editor.getValue();
-    var u=localStorage.getItem("pylearn_u"), p=localStorage.getItem("pylearn_p");
+    var u=localStorage.getItem("pypam_u"), p=localStorage.getItem("pypam_p");
     showView("terminal-view");
     term.innerHTML=""; term.focus();
     var proto=location.protocol==="https:"?"wss:":"ws:";
@@ -510,7 +491,7 @@ ADMIN_HTML = f"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=yes">
-<title>PyLearn - Admin</title>
+<title>PyPAM Admin - Editor Python Online do Prof. Alan Moraes</title>
 <style>
 {SHARED_CSS}
 body{{overflow-y:auto;}}
@@ -526,7 +507,7 @@ header {{ display:flex;justify-content:space-between;align-items:center;margin-b
 </head>
 <body>
     <div id="admin-login" class="view-container">
-        {LOGIN_BOX_TEMPLATE.format(title="PyLearn Admin", login_func="doAdminLogin")}
+        {LOGIN_BOX_TEMPLATE.format(title="PyPAM Admin", login_func="doAdminLogin")}
     </div>
 
     <div id="container" style="display:none">
