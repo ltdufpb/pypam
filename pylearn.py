@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PyLearn - Secure Docker-based Mobile Terminal
+PyLearn - Optimized for 1GB RAM / 2 vCPU
 """
 
 import os
@@ -11,10 +11,17 @@ import shutil
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import HTMLResponse
 
-# --- CONFIGURATION ---
+# --- HARDWARE TUNING ---
 PORT = int(os.getenv("PORT", 8000))
-DOCKER_IMAGE = "python:3.14-slim"
-MEM_LIMIT = "64m"
+DOCKER_IMAGE = "python:3.14-alpine"
+
+# Strict limits to fit 10 users into ~600MB RAM
+MAX_CONCURRENT_USERS = 10
+MEM_LIMIT = "48m"  # 48MB * 10 = 480MB (Leaves room for OS)
+CPU_LIMIT_NANO = int(0.25 * 1e9)  # 25% of 1 Core per user
+
+# Global Semaphore (The "Bouncer")
+user_lock = asyncio.Semaphore(MAX_CONCURRENT_USERS)
 
 try:
     client = docker.from_env()
@@ -33,128 +40,122 @@ app = FastAPI()
 @app.websocket("/ws")
 async def run_code(ws: WebSocket):
     await ws.accept()
-    container = None
-    temp_dir = tempfile.mkdtemp(prefix="pylearn_")
 
-    # Track if we have sent any data to the user
-    # If the program crashes instantly, we might need to fallback to logs
-    has_sent_output = False
-
-    try:
-        data = await ws.receive_json()
-        code = data.get("code", "")
-        if not code:
-            return
-
-        # Startup delay + unbuffered python (-u)
-        # Note: If code has SyntaxError, this sleep never happens!
-        safe_code = "import time; time.sleep(0.5)\n" + code
-
-        script_path = os.path.join(temp_dir, "script.py")
-        with open(script_path, "w", encoding="utf-8") as f:
-            f.write(safe_code)
-
-        # Create Container
-        container = client.containers.create(
-            DOCKER_IMAGE,
-            command=["python3", "-u", "/app/script.py"],
-            working_dir="/app",
-            stdin_open=True,
-            tty=True,
-            detach=True,
-            network_disabled=True,
-            mem_limit=MEM_LIMIT,
-            nano_cpus=int(0.5 * 1e9),
-            pids_limit=20,
-            read_only=True,
-            volumes={temp_dir: {"bind": "/app", "mode": "rw"}},
-            tmpfs={"/tmp": ""},
+    # Check if server is full
+    if user_lock.locked():
+        await ws.send_json(
+            {"t": "out", "d": "\n[Server Busy] Too many users. Please wait 10s...\n"}
         )
-
-        container.start()
-
-        # Attach Socket
-        socket = container.attach_socket(
-            params={"stdin": 1, "stdout": 1, "stderr": 1, "stream": 1}
-        )
-
-        async def forward_output():
-            nonlocal has_sent_output
-            loop = asyncio.get_event_loop()
-            while True:
-                try:
-                    # Read 1KB chunks
-                    data = await loop.run_in_executor(None, socket.read, 1024)
-                    if not data:
-                        break  # EOF
-                    has_sent_output = True
-                    await ws.send_json({"t": "out", "d": data.decode(errors="replace")})
-                except:
-                    break
-
-        output_task = asyncio.create_task(forward_output())
-
-        # Main Loop: Handle Input & Monitor Status
-        try:
-            while True:
-                container.reload()
-                if container.status != "running":
-                    break  # Container died, exit loop
-
-                try:
-                    # Quick timeout to keep checking container status
-                    msg = await asyncio.wait_for(ws.receive_json(), timeout=0.2)
-                    if msg.get("t") == "in":
-                        char = msg.get("d")
-                        os.write(socket.fileno(), char.encode())
-                except asyncio.TimeoutError:
-                    pass
-                except:
-                    break
-        except:
-            pass
-
-        # --- SHUTDOWN SEQUENCE ---
-
-        # 1. Wait for the output task to finish reading whatever is left in the pipe
-        #    (This catches the SyntaxError that happened right before exit)
-        try:
-            await asyncio.wait_for(output_task, timeout=2.0)
-        except asyncio.TimeoutError:
-            output_task.cancel()
-        except:
-            pass
-
-        # 2. Get Exit Code
-        container.reload()
-        exit_code = container.attrs["State"]["ExitCode"]
-
-        # 3. FALLBACK: If we haven't sent ANY output and it failed,
-        #    fetch logs directly. This guarantees we see SyntaxErrors.
-        if not has_sent_output and exit_code != 0:
-            try:
-                logs = container.logs().decode(errors="replace")
-                if logs:
-                    await ws.send_json({"t": "out", "d": logs})
-            except:
-                pass
-
-        await ws.send_json({"t": "end", "c": exit_code})
-
-    except Exception as e:
-        await ws.send_json({"t": "out", "d": f"\nServer Error: {e}\n"})
         await ws.send_json({"t": "end", "c": 1})
-    finally:
-        if container:
+        await ws.close()
+        return
+
+    async with user_lock:
+        container = None
+        temp_dir = tempfile.mkdtemp(prefix="pylearn_")
+        has_sent_output = False
+
+        try:
+            data = await ws.receive_json()
+            code = data.get("code", "")
+            if not code:
+                return
+
+            safe_code = "import time; time.sleep(0.5)\n" + code
+
+            script_path = os.path.join(temp_dir, "script.py")
+            with open(script_path, "w", encoding="utf-8") as f:
+                f.write(safe_code)
+
+            # Create Container with TIGHT limits
+            container = client.containers.create(
+                DOCKER_IMAGE,
+                command=["python3", "-u", "/app/script.py"],
+                working_dir="/app",
+                stdin_open=True,
+                tty=True,
+                detach=True,
+                network_disabled=True,
+                mem_limit=MEM_LIMIT,
+                nano_cpus=CPU_LIMIT_NANO,
+                pids_limit=15,  # Lower process limit
+                read_only=True,
+                volumes={temp_dir: {"bind": "/app", "mode": "rw"}},
+                tmpfs={"/tmp": ""},
+            )
+
+            container.start()
+
+            socket = container.attach_socket(
+                params={"stdin": 1, "stdout": 1, "stderr": 1, "stream": 1}
+            )
+
+            async def forward_output():
+                nonlocal has_sent_output
+                loop = asyncio.get_event_loop()
+                while True:
+                    try:
+                        data = await loop.run_in_executor(None, socket.read, 1024)
+                        if not data:
+                            break
+                        has_sent_output = True
+                        await ws.send_json(
+                            {"t": "out", "d": data.decode(errors="replace")}
+                        )
+                    except:
+                        break
+
+            output_task = asyncio.create_task(forward_output())
+
             try:
-                container.remove(force=True)
+                while True:
+                    container.reload()
+                    if container.status != "running":
+                        break
+                    try:
+                        msg = await asyncio.wait_for(ws.receive_json(), timeout=0.2)
+                        if msg.get("t") == "in":
+                            char = msg.get("d")
+                            os.write(socket.fileno(), char.encode())
+                    except asyncio.TimeoutError:
+                        pass
+                    except:
+                        break
             except:
                 pass
-        if os.path.exists(temp_dir):
+
             try:
-                shutil.rmtree(temp_dir)
+                await asyncio.wait_for(output_task, timeout=2.0)
             except:
-                pass
+                output_task.cancel()
+
+            container.reload()
+            exit_code = container.attrs["State"]["ExitCode"]
+
+            if not has_sent_output and exit_code != 0:
+                try:
+                    logs = container.logs().decode(errors="replace")
+                    if logs:
+                        await ws.send_json({"t": "out", "d": logs})
+                except:
+                    pass
+
+            await ws.send_json({"t": "end", "c": exit_code})
+
+        except Exception as e:
+            await ws.send_json({"t": "out", "d": f"\nError: {e}\n"})
+            await ws.send_json({"t": "end", "c": 1})
+        finally:
+            if container:
+                try:
+                    container.remove(force=True)
+                except:
+                    pass
+            if os.path.exists(temp_dir):
+                try:
+                    shutil.rmtree(temp_dir)
+                except:
+                    pass
 
 
 HTML = """<!DOCTYPE html>
@@ -306,5 +307,5 @@ def home():
 if __name__ == "__main__":
     import uvicorn
 
-    print(f"http://0.0.0.0:{PORT}")
+    # Listen on all interfaces
     uvicorn.run(app, host="0.0.0.0", port=PORT)
