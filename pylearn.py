@@ -9,8 +9,10 @@ TIMEOUT = 60
 PORT = int(os.getenv("PORT", 8000))
 app = FastAPI()
 
+
 def set_nonblocking(fd):
     fcntl.fcntl(fd, fcntl.F_SETFL, fcntl.fcntl(fd, fcntl.F_GETFL) | os.O_NONBLOCK)
+
 
 @app.websocket("/ws")
 async def run_code(ws: WebSocket):
@@ -20,7 +22,8 @@ async def run_code(ws: WebSocket):
         data = await ws.receive_json()
         code = data.get("code", "")
         tmp = f"/tmp/py_{uuid.uuid4().hex[:8]}.py"
-        with open(tmp, "w") as f: f.write(code)
+        with open(tmp, "w") as f:
+            f.write(code)
         pid, master_fd = pty.fork()
         if pid == 0:
             os.execvp("python3", ["python3", "-u", tmp])
@@ -37,39 +40,66 @@ async def run_code(ws: WebSocket):
                     try:
                         while True:
                             d = os.read(master_fd, 1024)
-                            if not d: break
-                            await ws.send_json({"t": "out", "d": d.decode("utf-8", errors="replace")})
-                    except: pass
-                    await ws.send_json({"t": "end", "c": os.WEXITSTATUS(result[1]) if os.WIFEXITED(result[1]) else -1})
+                            if not d:
+                                break
+                            await ws.send_json(
+                                {"t": "out", "d": d.decode("utf-8", errors="replace")}
+                            )
+                    except:
+                        pass
+                    await ws.send_json(
+                        {
+                            "t": "end",
+                            "c": os.WEXITSTATUS(result[1])
+                            if os.WIFEXITED(result[1])
+                            else -1,
+                        }
+                    )
                     pid = None
                     break
                 try:
                     r, _, _ = select.select([master_fd], [], [], 0.01)
                     if master_fd in r:
                         d = os.read(master_fd, 1024)
-                        if d: await ws.send_json({"t": "out", "d": d.decode("utf-8", errors="replace")})
-                except: pass
+                        if d:
+                            await ws.send_json(
+                                {"t": "out", "d": d.decode("utf-8", errors="replace")}
+                            )
+                except:
+                    pass
                 try:
                     msg = await asyncio.wait_for(ws.receive_json(), timeout=0.01)
-                    if msg.get("t") == "in": os.write(master_fd, msg.get("d", "").encode())
-                except asyncio.TimeoutError: pass
-                except: break
+                    if msg.get("t") == "in":
+                        os.write(master_fd, msg.get("d", "").encode())
+                except asyncio.TimeoutError:
+                    pass
+                except:
+                    break
                 await asyncio.sleep(0.01)
     except Exception as e:
         try:
             await ws.send_json({"t": "out", "d": f"\nErro: {e}\n"})
             await ws.send_json({"t": "end", "c": 1})
-        except: pass
+        except:
+            pass
     finally:
         if pid:
-            try: os.kill(pid, signal.SIGKILL); os.waitpid(pid, 0)
-            except: pass
+            try:
+                os.kill(pid, signal.SIGKILL)
+                os.waitpid(pid, 0)
+            except:
+                pass
         if master_fd:
-            try: os.close(master_fd)
-            except: pass
+            try:
+                os.close(master_fd)
+            except:
+                pass
         if tmp and os.path.exists(tmp):
-            try: os.remove(tmp)
-            except: pass
+            try:
+                os.remove(tmp)
+            except:
+                pass
+
 
 HTML = """<!DOCTYPE html>
 <html>
@@ -176,10 +206,14 @@ term.addEventListener("click",function(){term.focus();});
 </body>
 </html>"""
 
+
 @app.get("/", response_class=HTMLResponse)
-def home(): return HTML
+def home():
+    return HTML
+
 
 if __name__ == "__main__":
     import uvicorn
+
     print(f"http://0.0.0.0:{PORT}")
     uvicorn.run(app, host="0.0.0.0", port=PORT)
