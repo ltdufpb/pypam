@@ -13,7 +13,7 @@ from fastapi.responses import HTMLResponse
 
 # --- CONFIGURATION ---
 PORT = int(os.getenv("PORT", 8000))
-DOCKER_IMAGE = "python:3.11-slim"
+DOCKER_IMAGE = "python:3.14-slim"
 MEM_LIMIT = "64m"
 
 try:
@@ -36,6 +36,10 @@ async def run_code(ws: WebSocket):
     container = None
     temp_dir = tempfile.mkdtemp(prefix="pylearn_")
 
+    # Track if we have sent any data to the user
+    # If the program crashes instantly, we might need to fallback to logs
+    has_sent_output = False
+
     try:
         data = await ws.receive_json()
         code = data.get("code", "")
@@ -43,6 +47,7 @@ async def run_code(ws: WebSocket):
             return
 
         # Startup delay + unbuffered python (-u)
+        # Note: If code has SyntaxError, this sleep never happens!
         safe_code = "import time; time.sleep(0.5)\n" + code
 
         script_path = os.path.join(temp_dir, "script.py")
@@ -74,25 +79,30 @@ async def run_code(ws: WebSocket):
         )
 
         async def forward_output():
+            nonlocal has_sent_output
             loop = asyncio.get_event_loop()
             while True:
                 try:
+                    # Read 1KB chunks
                     data = await loop.run_in_executor(None, socket.read, 1024)
                     if not data:
-                        break
+                        break  # EOF
+                    has_sent_output = True
                     await ws.send_json({"t": "out", "d": data.decode(errors="replace")})
                 except:
                     break
 
         output_task = asyncio.create_task(forward_output())
 
-        # Main Loop
+        # Main Loop: Handle Input & Monitor Status
         try:
             while True:
                 container.reload()
                 if container.status != "running":
-                    break
+                    break  # Container died, exit loop
+
                 try:
+                    # Quick timeout to keep checking container status
                     msg = await asyncio.wait_for(ws.receive_json(), timeout=0.2)
                     if msg.get("t") == "in":
                         char = msg.get("d")
@@ -104,13 +114,35 @@ async def run_code(ws: WebSocket):
         except:
             pass
 
-        output_task.cancel()
+        # --- SHUTDOWN SEQUENCE ---
+
+        # 1. Wait for the output task to finish reading whatever is left in the pipe
+        #    (This catches the SyntaxError that happened right before exit)
+        try:
+            await asyncio.wait_for(output_task, timeout=2.0)
+        except asyncio.TimeoutError:
+            output_task.cancel()
+        except:
+            pass
+
+        # 2. Get Exit Code
         container.reload()
         exit_code = container.attrs["State"]["ExitCode"]
+
+        # 3. FALLBACK: If we haven't sent ANY output and it failed,
+        #    fetch logs directly. This guarantees we see SyntaxErrors.
+        if not has_sent_output and exit_code != 0:
+            try:
+                logs = container.logs().decode(errors="replace")
+                if logs:
+                    await ws.send_json({"t": "out", "d": logs})
+            except:
+                pass
+
         await ws.send_json({"t": "end", "c": exit_code})
 
     except Exception as e:
-        await ws.send_json({"t": "out", "d": f"\nError: {e}\n"})
+        await ws.send_json({"t": "out", "d": f"\nServer Error: {e}\n"})
         await ws.send_json({"t": "end", "c": 1})
     finally:
         if container:
@@ -147,12 +179,13 @@ html,body{height:100%;overflow:hidden;background:#1e1e1e;font-family:monospace}
 <body>
 
 <div id="editor-view">
-<textarea id="code" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off">nome = input("Nome: ")
-print(f"Ola {nome}!")
-
-for i in range(3):
-    x = input(f"Numero {i+1}: ")
-    print(f"Dobro: {int(x)*2}")</textarea>
+<textarea id="code" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off">i = 0
+while True:
+    print(f"Counting: {i}")
+    i += 1
+    if i > 5: break
+    import time
+    time.sleep(1)</textarea>
 <button id="run" onclick="start()">▶ EXECUTAR</button>
 </div>
 
@@ -192,59 +225,44 @@ function start(){
     ws.onerror=function(){append("\\n[Connection Error]");removeCursor();};
 }
 
-// --- NEW TERMINAL PARSER ---
 function processTermData(text) {
-    // 1. Remove carriage returns (\\r) to prevent overlapping lines
     text = text.replace(/\\r/g, "");
-    
-    // 2. Iterate character by character
     for (var i = 0; i < text.length; i++) {
         var char = text[i];
-        
-        // Handle Backspace (\\b) or Delete (\\x7f)
         if (char === "\\b" || char === "\\x08" || char === "\\x7f") {
             removeLast();
-        } 
-        else {
+        } else {
             appendChar(char);
         }
     }
-    // Scroll to bottom
     term.scrollTop = term.scrollHeight;
 }
 
 function appendChar(char){
     var c = document.getElementById("cur");
-    // Insert text BEFORE the cursor
     c.parentNode.insertBefore(document.createTextNode(char), c);
 }
 
 function append(txt) {
-    // For bulk messages like errors
     processTermData(txt);
 }
 
 function removeLast(){
     var c = document.getElementById("cur");
-    // Look backwards for a text node
     while (c.previousSibling) {
         var node = c.previousSibling;
-        if (node.nodeType === 3) { // Text Node
+        if (node.nodeType === 3) { 
             if (node.length > 0) {
-                // Delete the last character of this node
                 node.deleteData(node.length - 1, 1);
                 return; 
             } else {
-                // If node is empty, remove it and keep looking back
                 node.remove();
             }
         } else {
-            // Hit a non-text element (like a span?), stop.
             return;
         }
     }
 }
-// ----------------------------
 
 function back(){
     if(ws){ws.close();ws=null;}
