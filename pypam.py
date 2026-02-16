@@ -283,8 +283,8 @@ async def run_code(ws: WebSocket):
         container = None
         # Create a unique sandbox directory on the host
         temp_dir = tempfile.mkdtemp(prefix="pypam_")
-        # Grant read/execute permissions so the non-root container user can access it
-        os.chmod(temp_dir, 0o755)
+        # Grant full permissions so the non-root container user can write files
+        os.chmod(temp_dir, 0o777)
         has_sent_output = False
         
         try:
@@ -570,7 +570,6 @@ termInput.onkeydown = (e) => {{
     if(e.key === "Enter") ws.send(JSON.stringify({{t:"in",d:"\\n"}}));
     else if(e.key === "Backspace") ws.send(JSON.stringify({{t:"in",d:"\\x7f"}}));
     else if(e.ctrlKey && e.key === "c") ws.send(JSON.stringify({{t:"in",d:"\\x03"}}));
-    else if(e.key.length === 1 && !e.ctrlKey && !e.metaKey) ws.send(JSON.stringify({{t:"in",d:e.key}}));
 }};
 
 // Handles characters sent by mobile predictive text/autocorrect
