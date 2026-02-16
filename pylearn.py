@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PyLearn - Optimized for 1GB RAM / 2 vCPU
+PyLearn - Final Production Version
 """
 
 import os
@@ -11,16 +11,17 @@ import shutil
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import HTMLResponse
 
-# --- HARDWARE TUNING ---
+# --- CONFIGURATION ---
 PORT = int(os.getenv("PORT", 8000))
+
+# Lightweight Alpine Linux Image
 DOCKER_IMAGE = "python:3.14-alpine"
 
-# Strict limits to fit 10 users into ~600MB RAM
+# LIMITS
 MAX_CONCURRENT_USERS = 10
-MEM_LIMIT = "48m"  # 48MB * 10 = 480MB (Leaves room for OS)
-CPU_LIMIT_NANO = int(0.25 * 1e9)  # 25% of 1 Core per user
+MEM_LIMIT = "48m"
+CPU_LIMIT_NANO = int(0.20 * 1e9)
 
-# Global Semaphore (The "Bouncer")
 user_lock = asyncio.Semaphore(MAX_CONCURRENT_USERS)
 
 try:
@@ -41,11 +42,8 @@ app = FastAPI()
 async def run_code(ws: WebSocket):
     await ws.accept()
 
-    # Check if server is full
     if user_lock.locked():
-        await ws.send_json(
-            {"t": "out", "d": "\n[Server Busy] Too many users. Please wait 10s...\n"}
-        )
+        await ws.send_json({"t": "out", "d": "\n[Server Busy] Please wait...\n"})
         await ws.send_json({"t": "end", "c": 1})
         await ws.close()
         return
@@ -67,7 +65,6 @@ async def run_code(ws: WebSocket):
             with open(script_path, "w", encoding="utf-8") as f:
                 f.write(safe_code)
 
-            # Create Container with TIGHT limits
             container = client.containers.create(
                 DOCKER_IMAGE,
                 command=["python3", "-u", "/app/script.py"],
@@ -78,10 +75,13 @@ async def run_code(ws: WebSocket):
                 network_disabled=True,
                 mem_limit=MEM_LIMIT,
                 nano_cpus=CPU_LIMIT_NANO,
-                pids_limit=15,  # Lower process limit
+                pids_limit=15,
                 read_only=True,
                 volumes={temp_dir: {"bind": "/app", "mode": "rw"}},
                 tmpfs={"/tmp": ""},
+                # THE ONLY FIX NEEDED:
+                # We tell Python "This terminal is monochrome"
+                environment={"PYTHONIOENCODING": "utf-8", "PYTHON_COLORS": "0"},
             )
 
             container.start()
@@ -143,7 +143,7 @@ async def run_code(ws: WebSocket):
             await ws.send_json({"t": "end", "c": exit_code})
 
         except Exception as e:
-            await ws.send_json({"t": "out", "d": f"\nError: {e}\n"})
+            await ws.send_json({"t": "out", "d": f"\nSystem Error: {e}\n"})
             await ws.send_json({"t": "end", "c": 1})
         finally:
             if container:
@@ -186,7 +186,7 @@ while True:
     i += 1
     if i > 5: break
     import time
-    time.sleep(1)</textarea>
+    time.sleepx(1)</textarea>
 <button id="run" onclick="start()">▶ EXECUTAR</button>
 </div>
 
@@ -227,7 +227,9 @@ function start(){
 }
 
 function processTermData(text) {
+    // No regex needed here anymore!
     text = text.replace(/\\r/g, "");
+    
     for (var i = 0; i < text.length; i++) {
         var char = text[i];
         if (char === "\\b" || char === "\\x08" || char === "\\x7f") {
@@ -307,5 +309,4 @@ def home():
 if __name__ == "__main__":
     import uvicorn
 
-    # Listen on all interfaces
     uvicorn.run(app, host="0.0.0.0", port=PORT)
