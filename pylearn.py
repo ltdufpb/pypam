@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PyLearn - Final Production Version (Advanced Editor & Fully Unified UI)
+PyLearn - Final Production Version (Mobile Keyboard Fix & Unified UI)
 """
 
 import os
@@ -314,6 +314,19 @@ input:focus { border-color:var(--primary);box-shadow:0 0 0 2px rgba(0,122,204,0.
 .app-header { display:flex;justify-content:space-between;align-items:center;padding:10px 15px;background:var(--secondary);border-bottom:1px solid var(--border) }
 .user-label { color:var(--secondary-text);font-weight:600;font-size:14px }
 .logout-btn { background:none;border:none;color:var(--secondary-text);cursor:pointer;font-size:18px;padding:4px;display:flex;align-items:center }
+
+/* CodeMirror VS Code Light Theme */
+.CodeMirror { height: 100%; font-family: "Fira Code", monospace; font-size: 14px; line-height: 1.6; background: #fff; }
+.CodeMirror-gutters { background: #f8f9fa; border-right: 1px solid #e5e7eb; }
+.CodeMirror-linenumber { color: #adb5bd; padding: 0 8px; }
+.cm-s-default .cm-keyword { color: #0000ff; font-weight: bold; }
+.cm-s-default .cm-string { color: #a31515; }
+.cm-s-default .cm-comment { color: #008000; font-style: italic; }
+.cm-s-default .cm-variable-2 { color: #001080; }
+.cm-s-default .cm-def { color: #795e26; }
+.cm-s-default .cm-builtin { color: #0000ff; }
+.cm-s-default .cm-number { color: #098658; }
+.cm-s-default .cm-operator { color: #333; }
 """
 
 LOGIN_BOX_TEMPLATE = """
@@ -343,24 +356,14 @@ HTML = f"""<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=yes">
 <title>PyLearn</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.css">
 <style>
 {SHARED_CSS}
-#editor-container {{ flex:1; display:flex; background:#fff; overflow:hidden; }}
-#line-numbers {{ 
-    width:40px; padding:20px 0; background:#f8f9fa; border-right:1px solid #e5e7eb; 
-    color:#adb5bd; font-family:"Fira Code",monospace; font-size:14px; line-height:1.6; 
-    text-align:right; padding-right:8px; user-select:none; overflow:hidden;
-}}
-#code {{ 
-    flex:1; padding:20px; font-family:"Fira Code",monospace; font-size:14px; 
-    line-height:1.6; background:#fff; color:var(--text); border:none; resize:none; 
-    outline:none; white-space:pre; overflow-wrap:normal; overflow-x:auto;
-}}
+#editor-container {{ flex:1; overflow:hidden; background:#fff; position:relative; }}
 #terminal{{flex:1;padding:20px;font-family:"Fira Code",monospace;font-size:14px;line-height:1.6;color:#333;background:#f9fafb;white-space:pre-wrap;word-break:break-word;outline:none;overflow-y:auto;}}
 #run, #back {{ width:100%; border-radius:0; margin:0; padding:16px; font-size:16px; }}
 .cursor{{display:inline-block;width:8px;height:1.2em;background:#333;vertical-align:middle;animation:b 1s step-end infinite}}
 @keyframes b{{50%{{opacity:0}}}}
-#error-msg {{ color:var(--danger);font-size:14px;margin-top:12px;height:1.4em; }}
 </style>
 </head>
 <body>
@@ -370,56 +373,34 @@ HTML = f"""<!DOCTYPE html>
 <div id="editor-view" class="view-container">
     {HEADER_TEMPLATE}
     <div id="editor-container">
-        <div id="line-numbers">1</div>
-        <textarea id="code" spellcheck="false" autocapitalize="none" autocomplete="off" autocorrect="off" placeholder="Escreva seu código Python aqui..."></textarea>
+        <textarea id="code-editor"></textarea>
     </div>
     <button id="run" class="btn btn-success" onclick="start()">▶ EXECUTAR</button>
 </div>
 <div id="terminal-view" class="view-container">
     {HEADER_TEMPLATE}
     <div id="terminal" tabindex="0"></div>
+    <input type="text" id="term-input" style="position:absolute; opacity:0; pointer-events:none; left:-9999px;" autocapitalize="none" autocorrect="off" autocomplete="off" spellcheck="false">
     <button id="back" class="btn btn-secondary" onclick="back()">← Voltar</button>
 </div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/python/python.min.js"></script>
 <script>
-var ws, term=document.getElementById("terminal"), codeArea=document.getElementById("code"), lineNums=document.getElementById("line-numbers");
+var ws, term=document.getElementById("terminal"), termInput=document.getElementById("term-input"), editor;
 
-function updateLineNumbers() {{
-    const lines = codeArea.value.split("\\n").length;
-    let html = "";
-    for(let i=1; i<=lines; i++) html += i + "<br>";
-    lineNums.innerHTML = html;
-}}
-
-codeArea.addEventListener("input", updateLineNumbers);
-codeArea.addEventListener("scroll", () => {{
-    lineNums.scrollTop = codeArea.scrollTop;
-}});
-
-codeArea.addEventListener("keydown", function(e) {{
-    if(e.key === "Enter") {{
-        const start = this.selectionStart;
-        const end = this.selectionEnd;
-        const text = this.value;
-        const before = text.substring(0, start);
-        const lines = before.split("\\n");
-        const currentLine = lines[lines.length - 1];
-        const match = currentLine.match(/^\\s*/);
-        const indent = match ? match[0] : "";
-        const extraIndent = currentLine.trim().endsWith(":") ? "    " : "";
-        
-        e.preventDefault();
-        const insert = "\\n" + indent + extraIndent;
-        this.value = text.substring(0, start) + insert + text.substring(end);
-        this.selectionStart = this.selectionEnd = start + insert.length;
-        updateLineNumbers();
-    }}
-    if(e.key === "Tab") {{
-        e.preventDefault();
-        const start = this.selectionStart;
-        const end = this.selectionEnd;
-        this.value = this.value.substring(0, start) + "    " + this.value.substring(end);
-        this.selectionStart = this.selectionEnd = start + 4;
-    }}
+editor = CodeMirror.fromTextArea(document.getElementById("code-editor"), {{
+    mode: "python",
+    lineNumbers: true,
+    indentUnit: 4,
+    smartIndent: true,
+    tabSize: 4,
+    indentWithTabs: false,
+    extraKeys: {{"Tab": function(cm) {{ cm.replaceSelection("    ", "end"); }}}},
+    viewportMargin: Infinity,
+    autocapitalize: false,
+    spellcheck: false,
+    autocorrect: false
 }});
 
 function showView(id) {{
@@ -428,8 +409,28 @@ function showView(id) {{
     target.style.display = "flex";
     var u = localStorage.getItem("pylearn_u");
     if(u) {{ target.querySelectorAll(".user-display").forEach(el => el.innerText = u); }}
-    if(id === "editor-view") updateLineNumbers();
+    if(id === "editor-view") setTimeout(() => editor.refresh(), 10);
+    if(id === "terminal-view") setTimeout(() => termInput.focus(), 50);
 }}
+
+term.onclick = () => termInput.focus();
+
+termInput.onkeydown = (e) => {{
+    if(!ws || ws.readyState!==1) return;
+    if(e.key === "Enter") ws.send(JSON.stringify({{t:"in",d:"\\n"}}));
+    else if(e.key === "Backspace") ws.send(JSON.stringify({{t:"in",d:"\\x7f"}}));
+    else if(e.ctrlKey && e.key === "c") ws.send(JSON.stringify({{t:"in",d:"\\x03"}}));
+    else if(e.key.length === 1 && !e.ctrlKey && !e.metaKey) ws.send(JSON.stringify({{t:"in",d:e.key}}));
+}};
+
+// Handle mobile composition/input
+termInput.oninput = (e) => {{
+    if(!ws || ws.readyState!==1) return;
+    if(e.inputType === "insertText" && e.data) {{
+        ws.send(JSON.stringify({{t:"in", d:e.data}}));
+    }}
+    termInput.value = "";
+}};
 
 async function doLogin() {{
     var u = document.getElementById("username").value.trim();
@@ -437,7 +438,8 @@ async function doLogin() {{
     if(!u || !p) return;
     try {{
         var res = await fetch("/login", {{
-            method: "POST", headers: {{"Content-Type": "application/json"}},
+            method: "POST",
+            headers: {{"Content-Type": "application/json"}},
             body: JSON.stringify({{username: u, password: p}})
         }});
         var data = await res.json();
@@ -456,10 +458,14 @@ function doLogout() {{
 function initApp() {{
     var u = localStorage.getItem("pylearn_u"), p = localStorage.getItem("pylearn_p");
     if(u && p) {{ showView("editor-view"); }}
-    else {{ document.getElementById("username").value = ""; document.getElementById("password").value = ""; showView("login-view"); }}
+    else {{ 
+        document.getElementById("username").value = ""; 
+        document.getElementById("password").value = ""; 
+        showView("login-view"); 
+    }}
 }}
 function start(){{
-    var code=codeArea.value;
+    var code = editor.getValue();
     var u=localStorage.getItem("pylearn_u"), p=localStorage.getItem("pylearn_p");
     showView("terminal-view");
     term.innerHTML=""; term.focus();
@@ -494,15 +500,6 @@ function removeLast(){{
 function back(){{ if(ws){{ws.close();ws=null;}} showView("editor-view"); }}
 function addCursor(){{ var c=document.createElement("span"); c.className="cursor"; c.id="cur"; term.appendChild(c); }}
 function removeCursor(){{ var c=document.getElementById("cur"); if(c)c.remove(); }}
-term.addEventListener("keydown",function(e){{
-    if(!ws || ws.readyState!==1) return;
-    e.preventDefault();
-    var key = e.key;
-    if(key==="Enter") ws.send(JSON.stringify({{t:"in",d:"\\n"}}));
-    else if(key==="Backspace") ws.send(JSON.stringify({{t:"in",d:"\\x7f"}}));
-    else if(key.length===1 && !e.ctrlKey && !e.metaKey) ws.send(JSON.stringify({{t:"in",d:key}}));
-    else if(e.ctrlKey && key==="c") ws.send(JSON.stringify({{t:"in",d:"\\x03"}}));
-}});
 initApp();
 </script>
 </body>
@@ -544,7 +541,7 @@ header {{ display:flex;justify-content:space-between;align-items:center;margin-b
         <div id="modal-box">
             <h3 id="modal-title" style="margin-bottom:16px">Novo Estudante</h3>
             <p id="modal-desc" style="color:var(--secondary-text);font-size:14px;margin-bottom:16px"></p>
-            <input type="text" id="m_u" class="modal-input" placeholder="Usuário" autocomplete="username" autocapitalize="none" autocorrect="off" />
+            <input type="text" id="m_u" class="modal-input" placeholder="Usuário" autocomplete="username" />
             <input type="password" id="m_p" class="modal-input" placeholder="Senha" autocomplete="new-password" />
             <div style="display:flex;gap:10px;margin-top:10px">
                 <button class="btn btn-secondary" style="flex:1" onclick="closeModal()">CANCELAR</button>
