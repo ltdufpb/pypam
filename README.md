@@ -5,9 +5,9 @@ A secure, web-based Python environment for students to write and execute code in
 ## 🚀 Deployment Instructions
 
 ### 1. Prerequisites (Ubuntu/Debian)
-Ensure Docker is installed and your user has permissions:
+1. Install **Docker Engine** by following the official documentation: [https://docs.docker.com/engine/install/](https://docs.docker.com/engine/install/)
+2. Configure user permissions so you can run Docker without sudo:
 ```bash
-sudo apt update && sudo apt install docker.io -y
 sudo usermod -aG docker $USER
 # Log out and log back in for group changes to take effect
 ```
@@ -36,9 +36,9 @@ sudo systemctl start pypam
 ```
 
 ### 4. GitHub Synchronization
-Once you create the remote repository at GitHub, sync your local repo using:
+Sync your existing local repository with the remote repository on GitHub:
 ```bash
-git remote add origin http://github.com/ltdufpb/pypam.git
+git remote add origin https://github.com/ltdufpb/pypam.git
 git branch -M main
 git push -u origin main
 ```
