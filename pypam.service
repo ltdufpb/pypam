@@ -1,0 +1,26 @@
+[Unit]
+Description=PyPAM - Online Python Editor
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/pypam
+ExecStart=/home/ubuntu/pypam/.venv/bin/python pypam.py
+
+# Self-Healing: Restart within 5 seconds if the process dies
+Restart=always
+RestartSec=5s
+
+# Logging: Sent to Systemd Journal (view via journalctl)
+StandardOutput=journal
+StandardError=journal
+
+# Ensure Python doesn't buffer logs
+Environment=PORT=8000
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
