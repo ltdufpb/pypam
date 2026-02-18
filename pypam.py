@@ -73,6 +73,7 @@ Layer 5: Process Privilege
 import os
 import asyncio
 import docker
+from docker.types import Mount
 import tempfile
 import shutil
 from fastapi import FastAPI, WebSocket
@@ -91,6 +92,9 @@ MAX_CONCURRENT_USERS = 10
 
 # MEM_LIMIT: Memory limit for the container (cgroups).
 MEM_LIMIT = "48m"
+
+# DISK_LIMIT: Max disk space for writable areas (tmpfs).
+DISK_LIMIT = "10m"
 
 # CPU_LIMIT_NANO: CPU limit in nanoseconds (0.20 = 20% of one core).
 CPU_LIMIT_NANO = int(0.20 * 1e9)
@@ -329,8 +333,14 @@ async def run_code(ws: WebSocket):
                 nano_cpus=CPU_LIMIT_NANO, # CPU limit
                 pids_limit=15,         # Process limit
                 read_only=True,        # Protect root filesystem
-                volumes={temp_dir: {"bind": "/app", "mode": "rw"}}, # Mount student code
-                tmpfs={"/tmp": ""},    # Allow volatile writes in /tmp
+                mounts=[
+                    # Use tmpfs for the working directory with a size limit
+                    Mount(target="/app", type="tmpfs", tmpfs_options={"size": DISK_LIMIT}),
+                    # Bind mount the student's script as read-only on top of the tmpfs
+                    Mount(target="/app/script.py", source=script_path, type="bind", read_only=True),
+                    # Use tmpfs for /tmp with a size limit
+                    Mount(target="/tmp", type="tmpfs", tmpfs_options={"size": DISK_LIMIT}),
+                ],
                 user="65534:65534",    # Run as 'nobody' (unprivileged)
                 environment={"PYTHONIOENCODING": "utf-8", "PYTHON_COLORS": "0"},
             )
