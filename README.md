@@ -55,4 +55,21 @@ sudo systemctl start pypam
 - **Resource Caps**: Limited to 48MB RAM and 20% CPU.
 - **Network Disabled**: Containers have no internet/LAN access.
 - **Unprivileged User**: Code runs as `nobody`, preventing host escalation.
-- **File System**: Root filesystem is read-only; `/tmp` is non-persistent.
+- **File System**: Root filesystem is read-only.
+- **Disk Usage Limits**: Writable areas (`/app` and `/tmp`) are limited to 10MB via `tmpfs` to prevent host disk exhaustion.
+
+---
+
+## 🧪 Testing
+
+PyPAM includes an automated test suite to verify both API logic and container security isolation.
+
+```bash
+# Enter the virtual environment
+source .venv/bin/activate
+
+# Run all tests
+pytest -v tests/
+```
+
+Manual security payloads for testing via the UI can be found in the `tests/payloads/` directory.

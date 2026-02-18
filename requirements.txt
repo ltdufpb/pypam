@@ -3,4 +3,6 @@ uvicorn
 websockets
 docker
 ruff
-
+pytest
+pytest-asyncio
+httpx

@@ -1,3 +1,4 @@
+import os
 print("--- Testing Root Filesystem Read-Only ---")
 try:
     with open("/etc/pwned", "w") as f:
