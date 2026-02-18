@@ -1,4 +1,38 @@
+# Custom ignores
 admin.txt
 students.txt
 input.txt
-__pycache__
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.venv/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Testing / Coverage
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.cache
+nosetests.xml
+coverage.xml
+*.stats
+*.conf
+*.cur
+.ruff_cache/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
