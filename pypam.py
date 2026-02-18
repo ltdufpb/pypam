@@ -73,11 +73,31 @@ Layer 5: Process Privilege
 import os
 import asyncio
 import docker
+import logging
 from docker.types import Mount
 import tempfile
 import shutil
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket, Request
 from fastapi.responses import HTMLResponse
+from contextlib import asynccontextmanager
+
+# --- LOGGING CONFIGURATION ---
+# We use the standard logging module. Logs are written to stdout/stderr
+# which are captured by systemd-journald or Docker logs.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("pypam")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifecycle events for the FastAPI application."""
+    logger.info("PyPAM Service Starting")
+    logger.info(f"Port: {PORT}, Max Users: {MAX_CONCURRENT_USERS}")
+    yield
+    logger.info("PyPAM Service Stopping")
 
 # --- CONFIGURATION & LIMITS ---
 # PORT: The port the FastAPI server will listen on.
@@ -163,15 +183,15 @@ try:
         client.images.get(DOCKER_IMAGE)
     except docker.errors.ImageNotFound:
         # Pull the image if it's missing (happens on first run)
-        print(f"Pulling image {DOCKER_IMAGE}...")
+        logger.info(f"Pulling image {DOCKER_IMAGE}...")
         client.images.pull(DOCKER_IMAGE)
 except Exception as e:
-    print(f"CRITICAL ERROR: Docker is not ready.\n{e}")
+    logger.critical(f"Docker is not ready: {e}")
     exit(1)
 
 # Initialize the semaphore to enforce the concurrency limit
 user_lock = asyncio.Semaphore(MAX_CONCURRENT_USERS)
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 
 
 @app.post("/login")
@@ -186,7 +206,9 @@ async def login(data: dict):
     password = (data.get("password") or "").strip()
     users = get_allowlist()
     if username in users and users[username] == password:
+        logger.info(f"Student Login: {username} (Successful)")
         return {"success": True}
+    logger.warning(f"Student Login: {username} (Failed - Invalid credentials)")
     return {"success": False}
 
 
@@ -196,8 +218,11 @@ async def admin_login(data: dict):
     Endpoint for administrator authentication.
     """
     u, p = get_admin_creds()
-    if data.get("username") == u and data.get("password") == p:
+    username = data.get("username")
+    if username == u and data.get("password") == p:
+        logger.info(f"Admin Login: {username} (Successful)")
         return {"success": True}
+    logger.warning(f"Admin Login: {username} (Failed - Invalid credentials)")
     return {"success": False}
 
 
@@ -221,6 +246,7 @@ async def save_user(data: dict):
     """
     u, p = get_admin_creds()
     if data.get("admin_u") != u or data.get("admin_p") != p:
+        logger.warning(f"Admin attempt without credentials: {data.get('admin_u')}")
         return {"success": False, "msg": "Access denied"}
 
     new_u = (data.get("username") or "").strip()
@@ -236,12 +262,16 @@ async def save_user(data: dict):
         final_p = new_p if new_p else users[old_u]
         if old_u != new_u:
             del users[old_u]  # Handle username change
+            logger.info(f"Student renamed: {old_u} to {new_u} (Admin: {u})")
+        else:
+            logger.info(f"Student password updated: {new_u} (Admin: {u})")
         users[new_u] = final_p
     else:
         # New student logic
         if not new_p:
             return {"success": False, "msg": "Password required"}
         users[new_u] = new_p
+        logger.info(f"New student created: {new_u} (Admin: {u})")
 
     save_allowlist(users)
     return {"success": True}
@@ -261,6 +291,7 @@ async def delete_user(data: dict):
     if target in users:
         del users[target]
         save_allowlist(users)
+        logger.info(f"Student deleted: {target} (Admin: {u})")
     return {"success": True}
 
 
@@ -274,6 +305,7 @@ async def run_code(ws: WebSocket):
 
     # Early capacity check
     if user_lock.locked():
+        logger.warning("Resource Exhaustion: Server busy (Max users reached)")
         await ws.send_json({"t": "out", "d": "\n[Server Busy] Please wait...\n"})
         await ws.send_json({"t": "end", "c": 1})
         await ws.close()
@@ -300,6 +332,7 @@ async def run_code(ws: WebSocket):
 
             # Security double-check: verify credentials again within the socket
             if username not in users or users[username] != password:
+                logger.warning(f"Unauthorized WS access attempt: {username}")
                 await ws.send_json(
                     {"t": "out", "d": "\n[Access Denied] Invalid credentials.\n"}
                 )
@@ -308,6 +341,7 @@ async def run_code(ws: WebSocket):
 
             # Prevent concurrent sessions for the same user
             if username in active_sessions:
+                logger.warning(f"Concurrent session attempt: {username}")
                 await ws.send_json(
                     {"t": "out", "d": "\n[Access Denied] User already active.\n"}
                 )
@@ -316,6 +350,7 @@ async def run_code(ws: WebSocket):
 
             active_sessions.add(username)
             if not code:
+                logger.info(f"Empty code submitted by {username}")
                 return
 
             # Persist the student's code to the sandbox directory
@@ -325,6 +360,7 @@ async def run_code(ws: WebSocket):
             os.chmod(script_path, 0o644)
 
             # Define the sandbox container
+            logger.info(f"Spawning container for {username}")
             container = client.containers.create(
                 DOCKER_IMAGE,
                 command=["python3", "-u", "/app/script.py"],  # -u disables buffering
@@ -370,7 +406,8 @@ async def run_code(ws: WebSocket):
                         await ws.send_json(
                             {"t": "out", "d": data.decode(errors="replace")}
                         )
-                    except:
+                    except Exception as e:
+                        logger.debug(f"Output forwarding error for {username}: {e}")
                         break
 
             output_task = asyncio.create_task(forward_output())
@@ -389,19 +426,21 @@ async def run_code(ws: WebSocket):
                             os.write(socket.fileno(), msg.get("d").encode())
                     except asyncio.TimeoutError:
                         pass
-                    except:
+                    except Exception as e:
+                        logger.debug(f"Input handling error for {username}: {e}")
                         break
-            except:
-                pass
+            except Exception as e:
+                logger.error(f"Container loop error for {username}: {e}")
 
             # Cleanup output task
             try:
                 await asyncio.wait_for(output_task, timeout=2.0)
-            except:
+            except Exception:
                 output_task.cancel()
 
             container.reload()
             exit_code = container.attrs["State"]["ExitCode"]
+            logger.info(f"Execution finished for {username} (Exit Code: {exit_code})")
 
             # Error recovery: If no output was sent but exit code is non-zero,
             # it's likely a Python compilation error or startup crash.
@@ -410,12 +449,13 @@ async def run_code(ws: WebSocket):
                     logs = container.logs().decode(errors="replace")
                     if logs:
                         await ws.send_json({"t": "out", "d": logs})
-                except:
-                    pass
+                except Exception as e:
+                    logger.error(f"Failed to fetch logs for {username}: {e}")
 
             await ws.send_json({"t": "end", "c": exit_code})
 
         except Exception as e:
+            logger.exception(f"Exception during code execution for {username or 'unknown'}")
             await ws.send_json({"t": "out", "d": f"\nSystem Error: {e}\n"})
             await ws.send_json({"t": "end", "c": 1})
         finally:
@@ -425,13 +465,13 @@ async def run_code(ws: WebSocket):
             if container:
                 try:
                     container.remove(force=True)
-                except:
-                    pass
+                except Exception as e:
+                    logger.error(f"Failed to remove container for {username}: {e}")
             if os.path.exists(temp_dir):
                 try:
                     shutil.rmtree(temp_dir)
-                except:
-                    pass
+                except Exception as e:
+                    logger.error(f"Failed to remove temp dir for {username}: {e}")
 
 
 # --- FRONTEND TEMPLATES ---
