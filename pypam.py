@@ -334,6 +334,7 @@ async def run_code(ws: WebSocket):
                 detach=True,
                 network_disabled=True,  # Isolation
                 mem_limit=MEM_LIMIT,  # RAM limit
+                memswap_limit=MEM_LIMIT,  # Hard limit (RAM + Swap)
                 nano_cpus=CPU_LIMIT_NANO,  # CPU limit
                 pids_limit=15,  # Process limit
                 read_only=True,  # Protect root filesystem
