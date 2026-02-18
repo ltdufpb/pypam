@@ -5,9 +5,9 @@ PyPAM - Prof. Alan Moraes' Online Python Editor
 ===============================================================================
 1. HIGH-LEVEL ARCHITECTURAL OVERVIEW
 ===============================================================================
-PyPAM is built on a modern asynchronous stack designed for high concurrency 
-and security. The architecture follows a client-server model where the server 
-acts as a secure orchestrator between web clients and transient Docker 
+PyPAM is built on a modern asynchronous stack designed for high concurrency
+and security. The architecture follows a client-server model where the server
+acts as a secure orchestrator between web clients and transient Docker
 containers.
 
 Key Technologies:
@@ -22,24 +22,24 @@ Execution Lifecycle:
 3. Server validates credentials and acquires an execution slot (Semaphore).
 4. Server scaffolds a unique temporary environment on the host filesystem.
 5. A Docker container is spawned with strict hardware and software isolation.
-6. Stdin/Stdout/Stderr are bridged between the container's TTY and the 
+6. Stdin/Stdout/Stderr are bridged between the container's TTY and the
    client's browser in real-time.
 7. Upon termination, the container and all temporary files are destroyed.
 
 ===============================================================================
 2. SECURITY ARCHITECTURE (DEEP DIVE)
 ===============================================================================
-Executing arbitrary user code is inherently dangerous. PyPAM implements 
+Executing arbitrary user code is inherently dangerous. PyPAM implements
 defense-in-depth through five distinct layers:
 
 Layer 1: User Authentication
 - Every execution request is verified against a local student database.
-- Active session tracking prevents resource exhaustion by limiting one 
+- Active session tracking prevents resource exhaustion by limiting one
   concurrent execution per user.
 
 Layer 2: Network Isolation
 - Containers are created with 'network_disabled=True'.
-- This prevents the student's code from scanning the host network, 
+- This prevents the student's code from scanning the host network,
   accessing external APIs, or being used in botnets.
 
 Layer 3: Resource Constraints (Control Groups)
@@ -51,22 +51,22 @@ Layer 4: Filesystem Hardening
 - The root filesystem is 'read_only=True'.
 - A 'tmpfs' is mounted at /tmp to allow small, non-persistent writes.
 - The user's script is mounted via a volume with limited permissions.
-- 'os.chmod' is used on the host to ensure the container user (nobody) can 
+- 'os.chmod' is used on the host to ensure the container user (nobody) can
   read the script but not interfere with other students' data.
 
 Layer 5: Process Privilege
-- The container process runs as UID 65534 (nobody). Even if a student 
-  escapes the Python interpreter, they lack root privileges to exploit 
+- The container process runs as UID 65534 (nobody). Even if a student
+  escapes the Python interpreter, they lack root privileges to exploit
   kernel vulnerabilities or host filesystem mounts.
 
 ===============================================================================
 3. LOW-LEVEL IMPLEMENTATION NOTES
 ===============================================================================
 - Docker Socket: The server requires access to /var/run/docker.sock.
-- Asynchronous Bridge: The 'forward_output' inner function uses 
-  'run_in_executor' because the Docker SDK's socket.read() is a blocking 
+- Asynchronous Bridge: The 'forward_output' inner function uses
+  'run_in_executor' because the Docker SDK's socket.read() is a blocking
   operation that would otherwise stall the FastAPI event loop.
-- Terminal Proxy: Mobile keyboards often don't trigger on 'div' elements. 
+- Terminal Proxy: Mobile keyboards often don't trigger on 'div' elements.
   The terminal uses a hidden 'input' element to proxy focus and keystrokes.
 """
 
@@ -100,7 +100,7 @@ DISK_LIMIT = "10m"
 CPU_LIMIT_NANO = int(0.20 * 1e9)
 
 # --- AUTHENTICATION STATE ---
-ALLOWLIST_FILE = "students.txt" # Schema: username:password
+ALLOWLIST_FILE = "students.txt"  # Schema: username:password
 ADMIN_CREDS_FILE = "admin.txt"  # Schema: username:password
 
 # active_sessions: Thread-safe set (in async context) to prevent duplicate logins.
@@ -110,7 +110,7 @@ active_sessions = set()
 def get_allowlist():
     """
     Parses the student credentials file.
-    
+
     Returns:
         dict: A mapping of {username: password}.
     """
@@ -129,7 +129,7 @@ def get_allowlist():
 def save_allowlist(users):
     """
     Persists the student credentials dictionary to the filesystem.
-    
+
     Args:
         users (dict): The mapping of {username: password} to save.
     """
@@ -141,7 +141,7 @@ def save_allowlist(users):
 def get_admin_creds():
     """
     Parses the administrator credentials file.
-    
+
     Returns:
         tuple: (username, password). Defaults to ('admin', 'admin123').
     """
@@ -178,7 +178,7 @@ app = FastAPI()
 async def login(data: dict):
     """
     Endpoint for student authentication.
-    
+
     Args:
         data (dict): JSON containing 'username' and 'password'.
     """
@@ -235,7 +235,7 @@ async def save_user(data: dict):
         # Edit existing student logic
         final_p = new_p if new_p else users[old_u]
         if old_u != new_u:
-            del users[old_u] # Handle username change
+            del users[old_u]  # Handle username change
         users[new_u] = final_p
     else:
         # New student logic
@@ -267,11 +267,11 @@ async def delete_user(data: dict):
 @app.websocket("/ws")
 async def run_code(ws: WebSocket):
     """
-    Main execution hub. Manages the real-time bridge between the student and 
+    Main execution hub. Manages the real-time bridge between the student and
     their isolated Python environment.
     """
     await ws.accept()
-    
+
     # Early capacity check
     if user_lock.locked():
         await ws.send_json({"t": "out", "d": "\n[Server Busy] Please wait...\n"})
@@ -281,7 +281,7 @@ async def run_code(ws: WebSocket):
 
     username = None
     users = get_allowlist()
-    
+
     # Enter the semaphore context to reserve an execution slot
     async with user_lock:
         container = None
@@ -290,7 +290,7 @@ async def run_code(ws: WebSocket):
         # Grant full permissions so the non-root container user can write files
         os.chmod(temp_dir, 0o777)
         has_sent_output = False
-        
+
         try:
             # Protocol Start: Receive config and code from client
             data = await ws.receive_json()
@@ -300,13 +300,17 @@ async def run_code(ws: WebSocket):
 
             # Security double-check: verify credentials again within the socket
             if username not in users or users[username] != password:
-                await ws.send_json({"t": "out", "d": "\n[Access Denied] Invalid credentials.\n"})
+                await ws.send_json(
+                    {"t": "out", "d": "\n[Access Denied] Invalid credentials.\n"}
+                )
                 await ws.send_json({"t": "end", "c": 1})
                 return
 
             # Prevent concurrent sessions for the same user
             if username in active_sessions:
-                await ws.send_json({"t": "out", "d": "\n[Access Denied] User already active.\n"})
+                await ws.send_json(
+                    {"t": "out", "d": "\n[Access Denied] User already active.\n"}
+                )
                 await ws.send_json({"t": "end", "c": 1})
                 return
 
@@ -323,32 +327,32 @@ async def run_code(ws: WebSocket):
             # Define the sandbox container
             container = client.containers.create(
                 DOCKER_IMAGE,
-                command=["python3", "-u", "/app/script.py"], # -u disables buffering
+                command=["python3", "-u", "/app/script.py"],  # -u disables buffering
                 working_dir="/app",
-                stdin_open=True, # Allow interactive input
-                tty=True,        # Allocate a pseudo-TTY for better interactive behavior
+                stdin_open=True,  # Allow interactive input
+                tty=True,  # Allocate a pseudo-TTY for better interactive behavior
                 detach=True,
-                network_disabled=True, # Isolation
-                mem_limit=MEM_LIMIT,   # RAM limit
-                nano_cpus=CPU_LIMIT_NANO, # CPU limit
-                pids_limit=15,         # Process limit
-                read_only=True,        # Protect root filesystem
+                network_disabled=True,  # Isolation
+                mem_limit=MEM_LIMIT,  # RAM limit
+                nano_cpus=CPU_LIMIT_NANO,  # CPU limit
+                pids_limit=15,  # Process limit
+                read_only=True,  # Protect root filesystem
                 # Use tmpfs with explicit size and world-writable permissions
                 tmpfs={
                     "/app": f"size={DISK_LIMIT},mode=1777",
-                    "/tmp": f"size={DISK_LIMIT},mode=1777"
+                    "/tmp": f"size={DISK_LIMIT},mode=1777",
                 },
                 # Mount the script as read-only on top of the tmpfs
-                volumes={
-                    script_path: {"bind": "/app/script.py", "mode": "ro"}
-                },
-                user="65534:65534",    # Run as 'nobody' (unprivileged)
+                volumes={script_path: {"bind": "/app/script.py", "mode": "ro"}},
+                user="65534:65534",  # Run as 'nobody' (unprivileged)
                 environment={"PYTHONIOENCODING": "utf-8", "PYTHON_COLORS": "0"},
             )
 
             # IMPORTANT: We attach to the socket BEFORE starting the container.
             # This ensures we don't miss the first few bytes of output.
-            socket = container.attach_socket(params={"stdin": 1, "stdout": 1, "stderr": 1, "stream": 1})
+            socket = container.attach_socket(
+                params={"stdin": 1, "stdout": 1, "stderr": 1, "stream": 1}
+            )
             container.start()
 
             # Background worker to pull data from Docker and push to Browser
@@ -359,45 +363,57 @@ async def run_code(ws: WebSocket):
                     try:
                         # run_in_executor prevents blocking the main event loop
                         data = await loop.run_in_executor(None, socket.read, 1024)
-                        if not data: break
+                        if not data:
+                            break
                         has_sent_output = True
-                        await ws.send_json({"t": "out", "d": data.decode(errors="replace")})
-                    except: break
+                        await ws.send_json(
+                            {"t": "out", "d": data.decode(errors="replace")}
+                        )
+                    except:
+                        break
 
             output_task = asyncio.create_task(forward_output())
-            
+
             # Interactive loop: Wait for user input or container death
             try:
                 while True:
                     container.reload()
-                    if container.status != "running": break
+                    if container.status != "running":
+                        break
                     try:
                         # Small timeout allows us to check 'container.status' periodically
                         msg = await asyncio.wait_for(ws.receive_json(), timeout=0.2)
                         if msg.get("t") == "in":
                             # Forward browser keystrokes to the container's stdin
                             os.write(socket.fileno(), msg.get("d").encode())
-                    except asyncio.TimeoutError: pass
-                    except: break
-            except: pass
+                    except asyncio.TimeoutError:
+                        pass
+                    except:
+                        break
+            except:
+                pass
 
             # Cleanup output task
-            try: await asyncio.wait_for(output_task, timeout=2.0)
-            except: output_task.cancel()
+            try:
+                await asyncio.wait_for(output_task, timeout=2.0)
+            except:
+                output_task.cancel()
 
             container.reload()
             exit_code = container.attrs["State"]["ExitCode"]
-            
+
             # Error recovery: If no output was sent but exit code is non-zero,
             # it's likely a Python compilation error or startup crash.
             if not has_sent_output and exit_code != 0:
                 try:
                     logs = container.logs().decode(errors="replace")
-                    if logs: await ws.send_json({"t": "out", "d": logs})
-                except: pass
-            
+                    if logs:
+                        await ws.send_json({"t": "out", "d": logs})
+                except:
+                    pass
+
             await ws.send_json({"t": "end", "c": exit_code})
-            
+
         except Exception as e:
             await ws.send_json({"t": "out", "d": f"\nSystem Error: {e}\n"})
             await ws.send_json({"t": "end", "c": 1})
@@ -406,11 +422,15 @@ async def run_code(ws: WebSocket):
             if username and username in active_sessions:
                 active_sessions.remove(username)
             if container:
-                try: container.remove(force=True)
-                except: pass
+                try:
+                    container.remove(force=True)
+                except:
+                    pass
             if os.path.exists(temp_dir):
-                try: shutil.rmtree(temp_dir)
-                except: pass
+                try:
+                    shutil.rmtree(temp_dir)
+                except:
+                    pass
 
 
 # --- FRONTEND TEMPLATES ---
@@ -863,5 +883,6 @@ def admin():
 
 if __name__ == "__main__":
     import uvicorn
+
     # Start the production server on all interfaces
     uvicorn.run(app, host="0.0.0.0", port=PORT)
