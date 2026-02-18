@@ -15,7 +15,8 @@ sudo usermod -aG docker $USER
 ### 2. Initial Setup
 Clone the repository and prepare the virtual environment:
 ```bash
-cd /home/ubuntu/pypam
+git clone https://github.com/ltdufpb/pypam.git
+cd pypam
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -33,14 +34,6 @@ sudo systemctl enable pypam
 
 # Start the service
 sudo systemctl start pypam
-```
-
-### 4. GitHub Synchronization
-Sync your existing local repository with the remote repository on GitHub:
-```bash
-git remote add origin https://github.com/ltdufpb/pypam.git
-git branch -M main
-git push -u origin main
 ```
 
 ---
