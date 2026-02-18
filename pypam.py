@@ -74,6 +74,8 @@ import os
 import asyncio
 import docker
 import logging
+import time
+from collections import defaultdict
 from docker.types import Mount
 import tempfile
 import shutil
@@ -133,8 +135,33 @@ CPU_LIMIT_NANO = int(0.20 * 1e9)
 # Increased to 300s (5m) to allow slow typing during input().
 EXECUTION_TIMEOUT = int(os.getenv("EXECUTION_TIMEOUT", 300))
 
+# --- BRUTE-FORCE PROTECTION ---
+# MAX_FAILED_ATTEMPTS: Failed logins allowed before a cooldown is triggered.
+MAX_FAILED_ATTEMPTS = int(os.getenv("MAX_FAILED_ATTEMPTS", 5))
+# BRUTE_FORCE_COOLDOWN: Cooldown duration in seconds (10 minutes).
+BRUTE_FORCE_COOLDOWN = int(os.getenv("BRUTE_FORCE_COOLDOWN", 600))
+
+# failed_logins: Tracks {ip_address: {"count": int, "last_attempt": float}}
+failed_logins = defaultdict(lambda: {"count": 0, "last_attempt": 0})
+
+
+def check_brute_force(ip: str):
+    """
+    Checks if an IP is currently in a cooldown state.
+    """
+    record = failed_logins[ip]
+    now = time.time()
+    if record["count"] >= MAX_FAILED_ATTEMPTS:
+        time_passed = now - record["last_attempt"]
+        if time_passed < BRUTE_FORCE_COOLDOWN:
+            return False, int(BRUTE_FORCE_COOLDOWN - time_passed)
+        # Reset count after cooldown
+        record["count"] = 0
+    return True, 0
+
 
 # --- AUTHENTICATION STATE ---
+
 ALLOWLIST_FILE = "students.txt"  # Schema: username:password
 ADMIN_CREDS_FILE = "admin.txt"  # Schema: username:password
 
@@ -210,19 +237,38 @@ app = FastAPI(lifespan=lifespan)
 
 
 @app.post("/login")
-async def login(data: dict):
+async def login(data: dict, request: Request):
     """
     Endpoint for student authentication.
 
     Args:
         data (dict): JSON containing 'username' and 'password'.
     """
+    ip = request.client.host
     username = (data.get("username") or "").strip()
     password = (data.get("password") or "").strip()
+
+    can_attempt, wait_time = check_brute_force(ip)
+    if not can_attempt:
+        logger.warning(
+            f"Brute-force blocked for {ip} (Waiting {wait_time}s)",
+            extra={"user": username or "unknown"},
+        )
+        return {"success": False, "msg": f"Wait {wait_time}s before trying again."}
+
     users = get_allowlist()
     if username in users and users[username] == password:
         logger.info(f"Student Login: {username} (Successful)", extra={"user": username})
+        failed_logins.pop(ip, None)
         return {"success": True}
+
+    # Record failure
+    failed_logins[ip]["count"] += 1
+    failed_logins[ip]["last_attempt"] = time.time()
+
+    # Artificial delay to thwart automated attacks
+    await asyncio.sleep(1)
+
     logger.warning(
         f"Student Login: {username} (Failed - Invalid credentials)",
         extra={"user": username},
@@ -231,15 +277,34 @@ async def login(data: dict):
 
 
 @app.post("/admin/login")
-async def admin_login(data: dict):
+async def admin_login(data: dict, request: Request):
     """
     Endpoint for administrator authentication.
     """
+    ip = request.client.host
     u, p = get_admin_creds()
     username = data.get("username")
+
+    can_attempt, wait_time = check_brute_force(ip)
+    if not can_attempt:
+        logger.warning(
+            f"Brute-force blocked for {ip} (Waiting {wait_time}s)",
+            extra={"user": username or "admin"},
+        )
+        return {"success": False, "msg": f"Wait {wait_time}s before trying again."}
+
     if username == u and data.get("password") == p:
         logger.info(f"Admin Login: {username} (Successful)", extra={"user": username})
+        failed_logins.pop(ip, None)
         return {"success": True}
+
+    # Record failure
+    failed_logins[ip]["count"] += 1
+    failed_logins[ip]["last_attempt"] = time.time()
+
+    # Artificial delay
+    await asyncio.sleep(1)
+
     logger.warning(
         f"Admin Login: {username} (Failed - Invalid credentials)",
         extra={"user": username},
@@ -360,9 +425,27 @@ async def run_code(ws: WebSocket):
             username = (data.get("username") or "").strip()
             password = (data.get("password") or "").strip()
             code = data.get("code", "")
+            ip = ws.client.host
+
+            can_attempt, wait_time = check_brute_force(ip)
+            if not can_attempt:
+                logger.warning(
+                    f"Brute-force blocked (WS) for {ip} (Waiting {wait_time}s)",
+                    extra={"user": username or "unknown"},
+                )
+                await ws.send_json(
+                    {"t": "out", "d": f"\n[Access Denied] Wait {wait_time}s.\n"}
+                )
+                await ws.send_json({"t": "end", "c": 1})
+                return
 
             # Security double-check: verify credentials again within the socket
             if username not in users or users[username] != password:
+                # Record failure
+                failed_logins[ip]["count"] += 1
+                failed_logins[ip]["last_attempt"] = time.time()
+                await asyncio.sleep(1)
+
                 logger.warning(
                     f"Unauthorized WS access attempt: {username}",
                     extra={"user": username},
@@ -372,6 +455,8 @@ async def run_code(ws: WebSocket):
                 )
                 await ws.send_json({"t": "end", "c": 1})
                 return
+
+            failed_logins.pop(ip, None)
 
             # Prevent concurrent sessions for the same user
             if username in active_sessions:
