@@ -333,14 +333,15 @@ async def run_code(ws: WebSocket):
                 nano_cpus=CPU_LIMIT_NANO, # CPU limit
                 pids_limit=15,         # Process limit
                 read_only=True,        # Protect root filesystem
-                mounts=[
-                    # Use tmpfs for the working directory with a size limit
-                    Mount(target="/app", type="tmpfs", tmpfs_options={"size": DISK_LIMIT}),
-                    # Bind mount the student's script as read-only on top of the tmpfs
-                    Mount(target="/app/script.py", source=script_path, type="bind", read_only=True),
-                    # Use tmpfs for /tmp with a size limit
-                    Mount(target="/tmp", type="tmpfs", tmpfs_options={"size": DISK_LIMIT}),
-                ],
+                # Use tmpfs with explicit size and world-writable permissions
+                tmpfs={
+                    "/app": f"size={DISK_LIMIT},mode=1777",
+                    "/tmp": f"size={DISK_LIMIT},mode=1777"
+                },
+                # Mount the script as read-only on top of the tmpfs
+                volumes={
+                    script_path: {"bind": "/app/script.py", "mode": "ro"}
+                },
                 user="65534:65534",    # Run as 'nobody' (unprivileged)
                 environment={"PYTHONIOENCODING": "utf-8", "PYTHON_COLORS": "0"},
             )
