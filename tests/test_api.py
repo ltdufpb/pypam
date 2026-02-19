@@ -73,29 +73,34 @@ async def test_admin_user_management():
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as ac:
-        admin_data = {"admin_u": "admin", "admin_p": "admin123"}
+        # Login first to establish session
+        login_res = await ac.post(
+            "/admin/login", json={"username": "admin", "password": "admin123"}
+        )
+        assert login_res.status_code == 200
+        assert login_res.json()["success"] == True
 
         # Get users
-        response = await ac.post("/admin/get_users", json=admin_data)
+        response = await ac.post("/admin/get_users")
         assert response.status_code == 200
         assert "testuser" in response.json()["users"]
 
         # Save new user
-        new_user = {**admin_data, "username": "newstudent", "password": "newpassword"}
+        new_user = {"username": "newstudent", "password": "newpassword"}
         response = await ac.post("/admin/save_user", json=new_user)
         assert response.status_code == 200
         assert response.json()["success"] == True
 
         # Verify user was saved
-        response = await ac.post("/admin/get_users", json=admin_data)
+        response = await ac.post("/admin/get_users")
         assert "newstudent" in response.json()["users"]
 
         # Delete user
-        delete_data = {**admin_data, "username": "newstudent"}
+        delete_data = {"username": "newstudent"}
         response = await ac.post("/admin/delete_user", json=delete_data)
         assert response.status_code == 200
         assert response.json()["success"] == True
 
         # Verify user was deleted
-        response = await ac.post("/admin/get_users", json=admin_data)
+        response = await ac.post("/admin/get_users")
         assert "newstudent" not in response.json()["users"]

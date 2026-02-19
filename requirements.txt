@@ -8,3 +8,5 @@ pytest-asyncio
 pytest-timeout
 httpx
 passlib[argon2]
+itsdangerous
+cachetools

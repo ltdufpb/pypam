@@ -79,13 +79,21 @@ from collections import defaultdict
 from docker.types import Mount
 import tempfile
 import shutil
-from fastapi import FastAPI, WebSocket, Request
-from fastapi.responses import HTMLResponse
+import secrets
+from fastapi import FastAPI, WebSocket, Request, Depends
+from fastapi.responses import HTMLResponse, JSONResponse
 from contextlib import asynccontextmanager
 from passlib.context import CryptContext
+from starlette.middleware.sessions import SessionMiddleware
+from cachetools import TTLCache
 
 # --- SECURITY CONTEXT ---
+# SECRET_KEY: Used to sign session cookies. In production, set this via an
+# environment variable for persistence across restarts.
+SECRET_KEY = os.getenv("SESSION_SECRET", secrets.token_hex(32))
+
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
+
 
 def verify_password(plain_password, hashed_password):
     try:
@@ -96,6 +104,7 @@ def verify_password(plain_password, hashed_password):
         return pwd_context.verify(plain_password, hashed_password)
     except Exception:
         return False
+
 
 def get_password_hash(password):
     return pwd_context.hash(password)
@@ -158,22 +167,18 @@ MAX_FAILED_ATTEMPTS = int(os.getenv("MAX_FAILED_ATTEMPTS", 5))
 # BRUTE_FORCE_COOLDOWN: Cooldown duration in seconds (10 minutes).
 BRUTE_FORCE_COOLDOWN = int(os.getenv("BRUTE_FORCE_COOLDOWN", 600))
 
-# failed_logins: Tracks {ip_address: {"count": int, "last_attempt": float}}
-failed_logins = defaultdict(lambda: {"count": 0, "last_attempt": 0})
+# failed_logins: TTL Cache automatically clears entries after the cooldown.
+# This prevents memory exhaustion from spoofed IP addresses.
+failed_logins = TTLCache(maxsize=1000, ttl=BRUTE_FORCE_COOLDOWN)
 
 
 def check_brute_force(ip: str):
     """
     Checks if an IP is currently in a cooldown state.
     """
-    record = failed_logins[ip]
-    now = time.time()
-    if record["count"] >= MAX_FAILED_ATTEMPTS:
-        time_passed = now - record["last_attempt"]
-        if time_passed < BRUTE_FORCE_COOLDOWN:
-            return False, int(BRUTE_FORCE_COOLDOWN - time_passed)
-        # Reset count after cooldown
-        record["count"] = 0
+    count = failed_logins.get(ip, 0)
+    if count >= MAX_FAILED_ATTEMPTS:
+        return False, BRUTE_FORCE_COOLDOWN // 60
     return True, 0
 
 
@@ -226,15 +231,15 @@ def get_admin_creds():
     Parses the administrator credentials file.
 
     Returns:
-        tuple: (username, password). Defaults to ('admin', 'admin123').
+        tuple: (username, password_or_hash) or None if not found.
     """
     if not os.path.exists(ADMIN_CREDS_FILE):
-        return "admin", "admin123"
+        return None
     with open(ADMIN_CREDS_FILE, "r") as f:
         line = f.read().strip()
         if ":" in line:
             return line.split(":", 1)
-    return "admin", "admin123"
+    return None
 
 
 # --- DOCKER ENGINE CONNECTIVITY ---
@@ -255,6 +260,7 @@ except Exception as e:
 # Initialize the semaphore to enforce the concurrency limit
 user_lock = asyncio.Semaphore(MAX_CONCURRENT_USERS)
 app = FastAPI(lifespan=lifespan)
+app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 
 
 @app.post("/login")
@@ -285,15 +291,21 @@ async def login(data: dict, request: Request):
             if not stored_password.startswith("$argon2"):
                 users[username] = get_password_hash(password)
                 save_allowlist(users)
-                logger.info(f"Migrated password for {username} to hash", extra={"user": username})
+                logger.info(
+                    f"Migrated password for {username} to hash",
+                    extra={"user": username},
+                )
 
-            logger.info(f"Student Login: {username} (Successful)", extra={"user": username})
+            logger.info(
+                f"Student Login: {username} (Successful)", extra={"user": username}
+            )
             failed_logins.pop(ip, None)
+            request.session["user"] = username
+            request.session["role"] = "student"
             return {"success": True}
 
     # Record failure
-    failed_logins[ip]["count"] += 1
-    failed_logins[ip]["last_attempt"] = time.time()
+    failed_logins[ip] = failed_logins.get(ip, 0) + 1
 
     # Artificial delay to thwart automated attacks
     await asyncio.sleep(1)
@@ -311,7 +323,7 @@ async def admin_login(data: dict, request: Request):
     Endpoint for administrator authentication.
     """
     ip = request.client.host
-    u, p = get_admin_creds()
+    creds = get_admin_creds()
     username = data.get("username")
 
     can_attempt, wait_time = check_brute_force(ip)
@@ -322,14 +334,19 @@ async def admin_login(data: dict, request: Request):
         )
         return {"success": False, "msg": f"Wait {wait_time}s before trying again."}
 
-    if username == u and verify_password(data.get("password"), p):
-        logger.info(f"Admin Login: {username} (Successful)", extra={"user": username})
-        failed_logins.pop(ip, None)
-        return {"success": True}
+    if creds:
+        u, p = creds
+        if username == u and verify_password(data.get("password"), p):
+            logger.info(
+                f"Admin Login: {username} (Successful)", extra={"user": username}
+            )
+            failed_logins.pop(ip, None)
+            request.session["user"] = username
+            request.session["role"] = "admin"
+            return {"success": True}
 
     # Record failure
-    failed_logins[ip]["count"] += 1
-    failed_logins[ip]["last_attempt"] = time.time()
+    failed_logins[ip] = failed_logins.get(ip, 0) + 1
 
     # Artificial delay
     await asyncio.sleep(1)
@@ -342,31 +359,26 @@ async def admin_login(data: dict, request: Request):
 
 
 @app.post("/admin/get_users")
-async def get_users(data: dict):
+async def get_users(request: Request):
     """
     Fetches the list of students. Passwords are excluded for security.
     """
-    u, p = get_admin_creds()
-    if data.get("admin_u") != u or data.get("admin_p") != p:
-        return {"success": False}
+    if request.session.get("role") != "admin":
+        return JSONResponse({"success": False, "msg": "Unauthorized"}, status_code=403)
     users = get_allowlist()
     return {"success": True, "users": sorted(list(users.keys()))}
 
 
 @app.post("/admin/save_user")
-async def save_user(data: dict):
+async def save_user(data: dict, request: Request):
     """
     Updates an existing student or creates a new one.
     Handles password resetting (blank password = no change).
     """
-    u, p = get_admin_creds()
-    if data.get("admin_u") != u or data.get("admin_p") != p:
-        logger.warning(
-            f"Admin attempt without credentials: {data.get('admin_u')}",
-            extra={"user": data.get("admin_u") or "unknown"},
-        )
-        return {"success": False, "msg": "Access denied"}
+    if request.session.get("role") != "admin":
+        return JSONResponse({"success": False, "msg": "Unauthorized"}, status_code=403)
 
+    u = request.session.get("user")
     new_u = (data.get("username") or "").strip()
     new_p = (data.get("password") or "").strip()
     old_u = (data.get("old_username") or "").strip()
@@ -400,14 +412,14 @@ async def save_user(data: dict):
 
 
 @app.post("/admin/delete_user")
-async def delete_user(data: dict):
+async def delete_user(data: dict, request: Request):
     """
     Deletes a student from the database.
     """
-    u, p = get_admin_creds()
-    if data.get("admin_u") != u or data.get("admin_p") != p:
-        return {"success": False, "msg": "Access denied"}
+    if request.session.get("role") != "admin":
+        return JSONResponse({"success": False, "msg": "Unauthorized"}, status_code=403)
 
+    u = request.session.get("user")
     target = (data.get("username") or "").strip()
     users = get_allowlist()
     if target in users:
@@ -436,8 +448,15 @@ async def run_code(ws: WebSocket):
         await ws.close()
         return
 
-    username = None
-    users = get_allowlist()
+    username = ws.session.get("user")
+    role = ws.session.get("role")
+
+    if not username or role != "student":
+        logger.warning("Unauthorized WebSocket access attempt")
+        await ws.send_json({"t": "out", "d": "\n[Access Denied] Please login.\n"})
+        await ws.send_json({"t": "end", "c": 1})
+        await ws.close()
+        return
 
     # Enter the semaphore context to reserve an execution slot
     async with user_lock:
@@ -449,43 +468,10 @@ async def run_code(ws: WebSocket):
         has_sent_output = False
 
         try:
-            # Protocol Start: Receive config and code from client
+            # Protocol Start: Receive code from client
             data = await ws.receive_json()
-            username = (data.get("username") or "").strip()
-            password = (data.get("password") or "").strip()
             code = data.get("code", "")
             ip = ws.client.host
-
-            can_attempt, wait_time = check_brute_force(ip)
-            if not can_attempt:
-                logger.warning(
-                    f"Brute-force blocked (WS) for {ip} (Waiting {wait_time}s)",
-                    extra={"user": username or "unknown"},
-                )
-                await ws.send_json(
-                    {"t": "out", "d": f"\n[Access Denied] Wait {wait_time}s.\n"}
-                )
-                await ws.send_json({"t": "end", "c": 1})
-                return
-
-            # Security double-check: verify credentials again within the socket
-            if username not in users or not verify_password(password, users[username]):
-                # Record failure
-                failed_logins[ip]["count"] += 1
-                failed_logins[ip]["last_attempt"] = time.time()
-                await asyncio.sleep(1)
-
-                logger.warning(
-                    f"Unauthorized WS access attempt: {username}",
-                    extra={"user": username},
-                )
-                await ws.send_json(
-                    {"t": "out", "d": "\n[Access Denied] Invalid credentials.\n"}
-                )
-                await ws.send_json({"t": "end", "c": 1})
-                return
-
-            failed_logins.pop(ip, None)
 
             # Prevent concurrent sessions for the same user
             if username in active_sessions:
@@ -899,19 +885,19 @@ async function doLogin() {{
         }});
         var data = await res.json();
         if(data.success) {{
-            // Persist credentials locally for session maintenance
+            // We no longer store passwords. The session cookie handles auth.
             localStorage.setItem("pypam_u", u);
-            localStorage.setItem("pypam_p", p);
             initApp();
-        }} else {{ document.getElementById("error-msg").innerText = "Invalid username or password."; }}
+        }} else {{ document.getElementById("error-msg").innerText = data.msg || "Invalid username or password."; }}
     }} catch(e) {{ document.getElementById("error-msg").innerText = "Connection error."; }}
 }}
 
 function doLogout() {{
     if(confirm("Deseja realmente sair?")) {{
         localStorage.removeItem("pypam_u");
-        localStorage.removeItem("pypam_p");
-        initApp();
+        // To fully logout, we should ideally call a /logout endpoint to clear the session.
+        // For now, removing the local identifier and redirecting is enough for the UI.
+        location.reload(); 
     }}
 }}
 
@@ -922,8 +908,8 @@ function clearEditor() {{
 }}
 
 function initApp() {{
-    var u = localStorage.getItem("pypam_u"), p = localStorage.getItem("pypam_p");
-    if(u && p) {{ showView("editor-view"); }}
+    var u = localStorage.getItem("pypam_u");
+    if(u) {{ showView("editor-view"); }}
     else {{ 
         document.getElementById("username").value = ""; 
         document.getElementById("password").value = ""; 
@@ -933,7 +919,6 @@ function initApp() {{
 
 function start(){{
     var code = editor.getValue();
-    var u=localStorage.getItem("pypam_u"), p=localStorage.getItem("pypam_p");
     showView("terminal-view");
     term.innerHTML=""; term.focus();
     
@@ -942,7 +927,8 @@ function start(){{
     
     ws.onopen=function(){{ 
         addCursor(); 
-        ws.send(JSON.stringify({{code:code, username:u, password:p}})); 
+        // We only send the code; credentials are in the session cookie.
+        ws.send(JSON.stringify({{code:code}})); 
     }};
     
     ws.onmessage=function(e){{
@@ -1051,7 +1037,7 @@ header {{ display:flex;justify-content:space-between;align-items:center;margin-b
     </div>
 
 <script>
-var admin_u, admin_p, editing_u = null;
+var admin_u, editing_u = null;
 
 async function doAdminLogin() {{
     var u = document.getElementById("username").value, p = document.getElementById("password").value;
@@ -1061,18 +1047,18 @@ async function doAdminLogin() {{
     }});
     var data = await res.json();
     if(data.success) {{
-        admin_u = u; admin_p = p;
+        admin_u = u;
         document.getElementById("admin-login").style.display = "none";
         document.getElementById("container").style.display = "block";
         loadUsers();
-    }} else document.getElementById("error-msg").innerText = "Invalid admin.";
+    }} else document.getElementById("error-msg").innerText = data.msg || "Invalid admin.";
 }}
 
 async function loadUsers() {{
     var res = await fetch("/admin/get_users", {{
         method: "POST", 
         headers: {{"Content-Type": "application/json"}},
-        body: JSON.stringify({{admin_u: admin_u, admin_p: admin_p}})
+        body: JSON.stringify({{}})
     }});
     var data = await res.json();
     if(data.success) renderUsers(data.users);
@@ -1124,7 +1110,7 @@ async function handleModalSave() {{
     var res = await fetch("/admin/save_user", {{
         method: "POST", 
         headers: {{"Content-Type": "application/json"}},
-        body: JSON.stringify({{admin_u: admin_u, admin_p: admin_p, old_username: editing_u, username: u, password: p}})
+        body: JSON.stringify({{old_username: editing_u, username: u, password: p}})
     }});
     var data = await res.json();
     if(data.success) {{ closeModal(); loadUsers(); }} else alert(data.msg);
@@ -1135,7 +1121,7 @@ async function deleteUser(u) {{
         await fetch("/admin/delete_user", {{
             method: "POST", 
             headers: {{"Content-Type": "application/json"}},
-            body: JSON.stringify({{admin_u: admin_u, admin_p: admin_p, username: u}})
+            body: JSON.stringify({{username: u}})
         }});
         loadUsers();
     }}

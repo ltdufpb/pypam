@@ -30,11 +30,17 @@ def setup_user(monkeypatch):
 def test_execution_timeout():
     # Use pypam.app after reload
     client = TestClient(pypam.app)
+
+    # Login to establish session
+    login_res = client.post(
+        "/login", json={"username": "testuser", "password": "testpass"}
+    )
+    assert login_res.status_code == 200
+    assert login_res.json()["success"] == True
+
     with client.websocket_connect("/ws") as websocket:
         websocket.send_json(
             {
-                "username": "testuser",
-                "password": "testpass",
                 "code": read_payload("infinite"),
             }
         )

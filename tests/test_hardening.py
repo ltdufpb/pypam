@@ -27,8 +27,8 @@ HARDENING_TESTS = {
 
 @pytest.fixture(autouse=True)
 def setup_pypam(monkeypatch):
-    # Set a short timeout for quick testing
-    monkeypatch.setenv("EXECUTION_TIMEOUT", "2")
+    # Set a reasonable timeout for testing
+    monkeypatch.setenv("EXECUTION_TIMEOUT", "10")
     importlib.reload(pypam)
 
     with open(pypam.ALLOWLIST_FILE, "w") as f:
@@ -43,10 +43,15 @@ def test_security_hardening_scenarios(test_name):
     code = HARDENING_TESTS[test_name]
     client = TestClient(pypam.app)
 
+    # Login to establish session
+    login_res = client.post(
+        "/login", json={"username": "testuser", "password": "testpass"}
+    )
+    assert login_res.status_code == 200
+    assert login_res.json()["success"] == True
+
     with client.websocket_connect("/ws") as websocket:
-        websocket.send_json(
-            {"username": "testuser", "password": "testpass", "code": code}
-        )
+        websocket.send_json({"code": code})
 
         outputs = []
         exit_code = None

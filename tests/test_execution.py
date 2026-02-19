@@ -25,11 +25,16 @@ def setup_user():
 
 def test_websocket_execution_basic():
     client = TestClient(app)
+    # Login to establish session
+    login_res = client.post(
+        "/login", json={"username": "testuser", "password": "testpass"}
+    )
+    assert login_res.status_code == 200
+    assert login_res.json()["success"] == True
+
     with client.websocket_connect("/ws") as websocket:
         websocket.send_json(
             {
-                "username": "testuser",
-                "password": "testpass",
                 "code": read_payload("basic"),
             }
         )
@@ -49,11 +54,16 @@ def test_websocket_execution_basic():
 
 def test_websocket_execution_security_disk():
     client = TestClient(app)
+    # Login to establish session
+    login_res = client.post(
+        "/login", json={"username": "testuser", "password": "testpass"}
+    )
+    assert login_res.status_code == 200
+    assert login_res.json()["success"] == True
+
     with client.websocket_connect("/ws") as websocket:
         websocket.send_json(
             {
-                "username": "testuser",
-                "password": "testpass",
                 "code": read_payload("disk_limit"),
             }
         )
@@ -74,11 +84,16 @@ def test_websocket_execution_security_disk():
 
 def test_websocket_execution_security_memory():
     client = TestClient(app)
+    # Login to establish session
+    login_res = client.post(
+        "/login", json={"username": "testuser", "password": "testpass"}
+    )
+    assert login_res.status_code == 200
+    assert login_res.json()["success"] == True
+
     with client.websocket_connect("/ws") as websocket:
         websocket.send_json(
             {
-                "username": "testuser",
-                "password": "testpass",
                 "code": read_payload("memory_limit"),
             }
         )
@@ -92,11 +107,16 @@ def test_websocket_execution_security_memory():
 
 def test_websocket_execution_security_pid():
     client = TestClient(app)
+    # Login to establish session
+    login_res = client.post(
+        "/login", json={"username": "testuser", "password": "testpass"}
+    )
+    assert login_res.status_code == 200
+    assert login_res.json()["success"] == True
+
     with client.websocket_connect("/ws") as websocket:
         websocket.send_json(
             {
-                "username": "testuser",
-                "password": "testpass",
                 "code": read_payload("pid_limit"),
             }
         )
@@ -116,11 +136,16 @@ def test_websocket_execution_security_pid():
 
 def test_websocket_execution_security_readonly_fs():
     client = TestClient(app)
+    # Login to establish session
+    login_res = client.post(
+        "/login", json={"username": "testuser", "password": "testpass"}
+    )
+    assert login_res.status_code == 200
+    assert login_res.json()["success"] == True
+
     with client.websocket_connect("/ws") as websocket:
         websocket.send_json(
             {
-                "username": "testuser",
-                "password": "testpass",
                 "code": read_payload("fs_readonly"),
             }
         )

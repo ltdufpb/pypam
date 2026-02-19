@@ -22,7 +22,25 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 3. Install the Systemd Service
+### 3. Initial Configuration
+PyPAM requires an administrator account and a student list to function.
+
+#### Create Administrator
+Create a file named `admin.txt` in the root directory. The format is `username:password`.
+```bash
+echo "admin:yourpassword" > admin.txt
+```
+*Note: PyPAM will automatically hash this password and update the file upon your first login.*
+
+#### Create Student List (Optional)
+You can create a file named `input.txt` with a list of students and run the helper script:
+```bash
+# Format of input.txt: any_prefix student_name
+python3 create_students.py
+```
+This generates a `students.txt` file with secure Argon2 hashes.
+
+### 4. Install the Systemd Service
 The service ensures the app starts on boot and restarts automatically if it crashes.
 ```bash
 # Copy the service file to the system directory
