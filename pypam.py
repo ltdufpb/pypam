@@ -93,6 +93,7 @@ from cachetools import TTLCache
 SECRET_KEY = os.getenv("SESSION_SECRET", secrets.token_hex(32))
 ph = PasswordHasher()
 
+
 def verify_password(plain_password, hashed_password):
     """
     Verifies a plain text password against an Argon2 hash.
@@ -108,10 +109,10 @@ def verify_password(plain_password, hashed_password):
     except Exception:
         return False
 
+
 def get_password_hash(password):
     """Generates a secure Argon2 hash for the given password."""
     return ph.hash(password)
-
 
 
 # --- LOGGING CONFIGURATION ---
@@ -138,7 +139,13 @@ async def lifespan(app: FastAPI):
     logger.info("PyPAM Service Starting")
     logger.info(f"Port: {PORT}, Max Users: {MAX_CONCURRENT_USERS}")
     yield
+    # Explicitly close the Docker client connection pool
+    try:
+        client.close()
+    except Exception:
+        pass
     logger.info("PyPAM Service Stopping")
+
 
 # --- CONFIGURATION & LIMITS ---
 # PORT: The port the FastAPI server will listen on.
@@ -304,7 +311,9 @@ async def login(data: dict, request: Request):
     if username in users:
         stored_password = users[username]
         if verify_password(password, stored_password):
-            logger.info(f"Student Login: {username} (Successful)", extra={"user": username})
+            logger.info(
+                f"Student Login: {username} (Successful)", extra={"user": username}
+            )
             failed_logins.pop(ip, None)
             request.session["user"] = username
             request.session["role"] = "student"
