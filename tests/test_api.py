@@ -5,6 +5,11 @@ import os
 import shutil
 
 
+from argon2 import PasswordHasher
+
+ph = PasswordHasher()
+
+
 # Fixture to provide a clean state for each test
 @pytest.fixture(autouse=True)
 def clean_state():
@@ -16,11 +21,11 @@ def clean_state():
     if os.path.exists(ADMIN_CREDS_FILE):
         shutil.copy(ADMIN_CREDS_FILE, backup_admin)
 
-    # Create fresh files
+    # Create fresh files with Argon2 hashes
     with open(ALLOWLIST_FILE, "w") as f:
-        f.write("testuser:testpass\n")
+        f.write(f"testuser:{ph.hash('testpass')}\n")
     with open(ADMIN_CREDS_FILE, "w") as f:
-        f.write("admin:admin123\n")
+        f.write(f"admin:{ph.hash('admin123')}\n")
 
     yield
 

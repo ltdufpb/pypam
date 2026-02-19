@@ -7,6 +7,11 @@ from fastapi.testclient import TestClient
 import pypam
 
 
+from argon2 import PasswordHasher
+
+ph = PasswordHasher()
+
+
 @pytest.fixture(autouse=True)
 def setup_brute_force(monkeypatch):
     # Set very short limits for quick testing using environment variables
@@ -20,7 +25,7 @@ def setup_brute_force(monkeypatch):
     pypam.failed_logins.clear()
 
     with open(pypam.ALLOWLIST_FILE, "w") as f:
-        f.write("testuser:testpass\n")
+        f.write(f"testuser:{ph.hash('testpass')}\n")
     yield
     if os.path.exists(pypam.ALLOWLIST_FILE):
         os.remove(pypam.ALLOWLIST_FILE)

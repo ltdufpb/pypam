@@ -23,22 +23,21 @@ pip install -r requirements.txt
 ```
 
 ### 3. Initial Configuration
-PyPAM requires an administrator account and a student list to function.
+PyPAM requires an administrator account and a student list to function. Passwords must be pre-hashed using Argon2 before being placed in configuration files.
 
 #### Create Administrator
-Create a file named `admin.txt` in the root directory. The format is `username:password`.
+Use the provided utility to generate a secure `admin.txt` file:
 ```bash
-echo "admin:yourpassword" > admin.txt
+python3 create_students.py --admin admin yourpassword
 ```
-*Note: PyPAM will automatically hash this password and update the file upon your first login.*
+This will create an `admin.txt` file containing the username and a secure hash.
 
 #### Create Student List (Optional)
-You can create a file named `input.txt` with a list of students and run the helper script:
+Prepare a file named `input.txt` (Format: `any_prefix username`) and run the script:
 ```bash
-# Format of input.txt: any_prefix student_name
 python3 create_students.py
 ```
-This generates a `students.txt` file with secure Argon2 hashes.
+This generates a `students.txt` file with pre-hashed credentials.
 
 ### 4. Install the Systemd Service
 The service ensures the app starts on boot and restarts automatically if it crashes.

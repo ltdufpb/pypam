@@ -25,6 +25,11 @@ HARDENING_TESTS = {
 }
 
 
+from argon2 import PasswordHasher
+
+ph = PasswordHasher()
+
+
 @pytest.fixture(autouse=True)
 def setup_pypam(monkeypatch):
     # Set a reasonable timeout for testing
@@ -32,7 +37,7 @@ def setup_pypam(monkeypatch):
     importlib.reload(pypam)
 
     with open(pypam.ALLOWLIST_FILE, "w") as f:
-        f.write("testuser:testpass\n")
+        f.write(f"testuser:{ph.hash('testpass')}\n")
     yield
     if os.path.exists(pypam.ALLOWLIST_FILE):
         os.remove(pypam.ALLOWLIST_FILE)

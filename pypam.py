@@ -89,28 +89,29 @@ from starlette.middleware.sessions import SessionMiddleware
 from cachetools import TTLCache
 
 # --- SECURITY CONTEXT ---
-# SECRET_KEY: Used to sign session cookies. In production, set this via an
-# environment variable for persistence across restarts.
+# SECRET_KEY: Used to sign session cookies.
 SECRET_KEY = os.getenv("SESSION_SECRET", secrets.token_hex(32))
-
 ph = PasswordHasher()
 
-
 def verify_password(plain_password, hashed_password):
+    """
+    Verifies a plain text password against an Argon2 hash.
+    Plaintext passwords are not supported and will fail.
+    """
     try:
-        # Check if it's a hash (starts with typical argon2 prefix)
+        # We only support Argon2 hashes
         if not hashed_password.startswith("$argon2"):
-            # Fallback for legacy plaintext passwords
-            return plain_password == hashed_password
+            return False
         return ph.verify(hashed_password, plain_password)
     except VerifyMismatchError:
         return False
     except Exception:
         return False
 
-
 def get_password_hash(password):
+    """Generates a secure Argon2 hash for the given password."""
     return ph.hash(password)
+
 
 
 # --- LOGGING CONFIGURATION ---
@@ -136,36 +137,8 @@ async def lifespan(app: FastAPI):
     """Lifecycle events for the FastAPI application."""
     logger.info("PyPAM Service Starting")
     logger.info(f"Port: {PORT}, Max Users: {MAX_CONCURRENT_USERS}")
-
-    # OWASP A04:2025 - Automatic Hashing on Startup
-    # Secure all plaintext credentials before the server starts accepting requests
-    try:
-        # Secure admin file
-        creds = get_admin_creds()
-        if creds:
-            u, p = creds
-            if not p.startswith("$argon2"):
-                with open(ADMIN_CREDS_FILE, "w") as f:
-                    f.write(f"{u}:{get_password_hash(p)}\n")
-                logger.info("Secured admin.txt with Argon2 hash")
-
-        # Secure student file
-        users = get_allowlist()
-        if users:
-            needs_update = False
-            for u, p in users.items():
-                if not p.startswith("$argon2"):
-                    users[u] = get_password_hash(p)
-                    needs_update = True
-            if needs_update:
-                save_allowlist(users)
-                logger.info("Secured students.txt with Argon2 hashes")
-    except Exception as e:
-        logger.error(f"Startup Hashing Failed: {e}")
-
     yield
     logger.info("PyPAM Service Stopping")
-
 
 # --- CONFIGURATION & LIMITS ---
 # PORT: The port the FastAPI server will listen on.
@@ -293,10 +266,10 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 
 
-# --- OWASP A10:2025 - Mishandling of Exceptional Conditions ---
+# --- GLOBAL ERROR HANDLING ---
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    """Prevents traceback leakage in case of unhandled server errors."""
+    """Global handler to catch unhandled errors and prevent leaking tracebacks."""
     logger.exception(f"Unhandled server error: {exc}")
     return JSONResponse(
         status_code=500,
@@ -331,18 +304,7 @@ async def login(data: dict, request: Request):
     if username in users:
         stored_password = users[username]
         if verify_password(password, stored_password):
-            # Migration: If it was plaintext, save the hash now
-            if not stored_password.startswith("$argon2"):
-                users[username] = get_password_hash(password)
-                save_allowlist(users)
-                logger.info(
-                    f"Migrated password for {username} to hash",
-                    extra={"user": username},
-                )
-
-            logger.info(
-                f"Student Login: {username} (Successful)", extra={"user": username}
-            )
+            logger.info(f"Student Login: {username} (Successful)", extra={"user": username})
             failed_logins.pop(ip, None)
             request.session["user"] = username
             request.session["role"] = "student"

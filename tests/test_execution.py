@@ -13,11 +13,16 @@ def read_payload(name):
         return f.read()
 
 
+from argon2 import PasswordHasher
+
+ph = PasswordHasher()
+
+
 @pytest.fixture(autouse=True)
 def setup_user():
-    # Ensure there's a test user
+    # Ensure there's a test user with a hashed password
     with open(ALLOWLIST_FILE, "w") as f:
-        f.write("testuser:testpass\n")
+        f.write(f"testuser:{ph.hash('testpass')}\n")
     yield
     if os.path.exists(ALLOWLIST_FILE):
         os.remove(ALLOWLIST_FILE)
