@@ -1,10 +1,10 @@
-from passlib.context import CryptContext
+from argon2 import PasswordHasher
 
-pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
+ph = PasswordHasher()
 
 
 def get_password_hash(password):
-    return pwd_context.hash(password)
+    return ph.hash(password)
 
 
 with open("input.txt", "r") as input_file, open("students.txt", "w") as output_file:

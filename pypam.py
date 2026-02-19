@@ -83,7 +83,8 @@ import secrets
 from fastapi import FastAPI, WebSocket, Request, Depends
 from fastapi.responses import HTMLResponse, JSONResponse
 from contextlib import asynccontextmanager
-from passlib.context import CryptContext
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError
 from starlette.middleware.sessions import SessionMiddleware
 from cachetools import TTLCache
 
@@ -92,7 +93,7 @@ from cachetools import TTLCache
 # environment variable for persistence across restarts.
 SECRET_KEY = os.getenv("SESSION_SECRET", secrets.token_hex(32))
 
-pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
+ph = PasswordHasher()
 
 
 def verify_password(plain_password, hashed_password):
@@ -101,13 +102,15 @@ def verify_password(plain_password, hashed_password):
         if not hashed_password.startswith("$argon2"):
             # Fallback for legacy plaintext passwords
             return plain_password == hashed_password
-        return pwd_context.verify(plain_password, hashed_password)
+        return ph.verify(hashed_password, plain_password)
+    except VerifyMismatchError:
+        return False
     except Exception:
         return False
 
 
 def get_password_hash(password):
-    return pwd_context.hash(password)
+    return ph.hash(password)
 
 
 # --- LOGGING CONFIGURATION ---
@@ -133,6 +136,33 @@ async def lifespan(app: FastAPI):
     """Lifecycle events for the FastAPI application."""
     logger.info("PyPAM Service Starting")
     logger.info(f"Port: {PORT}, Max Users: {MAX_CONCURRENT_USERS}")
+
+    # OWASP A04:2025 - Automatic Hashing on Startup
+    # Secure all plaintext credentials before the server starts accepting requests
+    try:
+        # Secure admin file
+        creds = get_admin_creds()
+        if creds:
+            u, p = creds
+            if not p.startswith("$argon2"):
+                with open(ADMIN_CREDS_FILE, "w") as f:
+                    f.write(f"{u}:{get_password_hash(p)}\n")
+                logger.info("Secured admin.txt with Argon2 hash")
+
+        # Secure student file
+        users = get_allowlist()
+        if users:
+            needs_update = False
+            for u, p in users.items():
+                if not p.startswith("$argon2"):
+                    users[u] = get_password_hash(p)
+                    needs_update = True
+            if needs_update:
+                save_allowlist(users)
+                logger.info("Secured students.txt with Argon2 hashes")
+    except Exception as e:
+        logger.error(f"Startup Hashing Failed: {e}")
+
     yield
     logger.info("PyPAM Service Stopping")
 
@@ -142,7 +172,7 @@ async def lifespan(app: FastAPI):
 PORT = int(os.getenv("PORT", 8000))
 
 # DOCKER_IMAGE: A lightweight Python image. Alpine is used for fast startup.
-DOCKER_IMAGE = "python:3.14-alpine"
+DOCKER_IMAGE = "python:3.13-alpine"
 
 # MAX_CONCURRENT_USERS: Max number of students running code at the same time.
 # This prevents the host from running out of file descriptors or memory.
@@ -261,6 +291,20 @@ except Exception as e:
 user_lock = asyncio.Semaphore(MAX_CONCURRENT_USERS)
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
+
+
+# --- OWASP A10:2025 - Mishandling of Exceptional Conditions ---
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Prevents traceback leakage in case of unhandled server errors."""
+    logger.exception(f"Unhandled server error: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "success": False,
+            "msg": "Internal server error. Please contact the administrator.",
+        },
+    )
 
 
 @app.post("/login")
