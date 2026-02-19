@@ -772,9 +772,9 @@ LOGIN_BOX_TEMPLATE = """
     <div class="login-screen">
         <div class="login-box">
             <h2>{title}</h2>
-            <input type="text" id="username" name="username" placeholder="Username" autocomplete="username" autocapitalize="none" autocorrect="off" onkeydown="if(event.key==='Enter') {login_func}()"/>
-            <input type="password" id="password" name="password" placeholder="Password" autocomplete="current-password" onkeydown="if(event.key==='Enter') {login_func}()"/>
-            <button class="btn btn-primary" onclick="{login_func}()">ENTER</button>
+            <input type="text" id="username" name="username" placeholder="Usuário" autocomplete="username" autocapitalize="none" autocorrect="off" onkeydown="if(event.key==='Enter') {login_func}()"/>
+            <input type="password" id="password" name="password" placeholder="Senha" autocomplete="current-password" onkeydown="if(event.key==='Enter') {login_func}()"/>
+            <button class="btn btn-primary" onclick="{login_func}()">ENTRAR</button>
             <div id="error-msg" style="color:var(--danger);font-size:14px;margin-top:12px;height:1.4em;"></div>
         </div>
     </div>
@@ -801,7 +801,7 @@ HTML = f"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=yes">
-<title>PyPAM - Prof. Alan Moraes' Online Python Editor</title>
+<title>PyPAM - Editor de Python Online do Prof. Alan Moraes</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.css">
 <style>
 {SHARED_CSS}
@@ -814,21 +814,21 @@ HTML = f"""<!DOCTYPE html>
 </head>
 <body>
 <div id="login-view" class="view-container">
-    {LOGIN_BOX_TEMPLATE.format(title="Student Access", login_func="doLogin")}
+    {LOGIN_BOX_TEMPLATE.format(title="Acesso do Estudante", login_func="doLogin")}
 </div>
 <div id="editor-view" class="view-container">
     {HEADER_TEMPLATE}
     <div id="editor-container">
         <textarea id="code-editor"></textarea>
     </div>
-    <button id="run" class="btn btn-success" onclick="start()">▶ EXECUTE</button>
+    <button id="run" class="btn btn-success" onclick="start()">▶ EXECUTAR</button>
 </div>
 <div id="terminal-view" class="view-container">
     {HEADER_TEMPLATE}
     <div id="terminal" tabindex="0"></div>
     <!-- The hidden input below triggers the mobile keyboard and captures data for the terminal -->
     <input type="text" id="term-input" style="position:absolute; opacity:0; pointer-events:none; left:-9999px;" autocapitalize="none" autocorrect="off" autocomplete="off" spellcheck="false">
-    <button id="back" class="btn btn-secondary" onclick="back()">← Back</button>
+    <button id="back" class="btn btn-secondary" onclick="back()">← Voltar</button>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.js"></script>
@@ -887,7 +887,7 @@ termInput.oninput = (e) => {{
 
 async function doLogin() {{
     var u = document.getElementById("username").value.trim();
-    var p = document.getElementById("password").value.trim();
+    var p = document.getElementById("password").value;
     if(!u || !p) return;
     try {{
         var res = await fetch("/login", {{
@@ -900,8 +900,8 @@ async function doLogin() {{
             // We no longer store passwords. The session cookie handles auth.
             localStorage.setItem("pypam_u", u);
             initApp();
-        }} else {{ document.getElementById("error-msg").innerText = data.msg || "Invalid username or password."; }}
-    }} catch(e) {{ document.getElementById("error-msg").innerText = "Connection error."; }}
+        }} else {{ document.getElementById("error-msg").innerText = data.msg || "Usuário ou senha inválidos."; }}
+    }} catch(e) {{ document.getElementById("error-msg").innerText = "Erro de conexão."; }}
 }}
 
 function doLogout() {{
@@ -1008,7 +1008,7 @@ ADMIN_HTML = f"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=yes">
-<title>PyPAM Admin - Prof. Alan Moraes' Online Python Editor</title>
+<title>PyPAM Administração - Editor de Python Online do Prof. Alan Moraes</title>
 <style>
 {SHARED_CSS}
 body{{overflow-y:auto;}}
@@ -1024,26 +1024,26 @@ header {{ display:flex;justify-content:space-between;align-items:center;margin-b
 </head>
 <body>
     <div id="admin-login" class="view-container">
-        {LOGIN_BOX_TEMPLATE.format(title="PyPAM Admin", login_func="doAdminLogin")}
+        {LOGIN_BOX_TEMPLATE.format(title="PyPAM Administração", login_func="doAdminLogin")}
     </div>
 
     <div id="container" style="display:none">
         <header>
-            <h2 style="font-size:20px">Students</h2>
-            <button class="btn btn-success" onclick="openModal()">+ NEW</button>
+            <h2 style="font-size:20px">Estudantes</h2>
+            <button class="btn btn-success" onclick="openModal()">+ NOVO</button>
         </header>
         <div id="user-list"></div>
     </div>
 
     <div id="modal">
         <div id="modal-box">
-            <h3 id="modal-title" style="margin-bottom:16px">New Student</h3>
+            <h3 id="modal-title" style="margin-bottom:16px">Novo Estudante</h3>
             <p id="modal-desc" style="color:var(--secondary-text);font-size:14px;margin-bottom:16px"></p>
-            <input type="text" id="m_u" class="modal-input" placeholder="Username" autocomplete="username" />
-            <input type="password" id="m_p" class="modal-input" placeholder="Password" autocomplete="new-password" />
+            <input type="text" id="m_u" class="modal-input" placeholder="Usuário" autocomplete="username" />
+            <input type="password" id="m_p" class="modal-input" placeholder="Senha" autocomplete="new-password" />
             <div style="display:flex;gap:10px;margin-top:10px">
-                <button class="btn btn-secondary" style="flex:1" onclick="closeModal()">CANCEL</button>
-                <button class="btn btn-primary" style="flex:1" onclick="handleModalSave()">SAVE</button>
+                <button class="btn btn-secondary" style="flex:1" onclick="closeModal()">CANCELAR</button>
+                <button class="btn btn-primary" style="flex:1" onclick="handleModalSave()">SALVAR</button>
             </div>
         </div>
     </div>
@@ -1052,7 +1052,7 @@ header {{ display:flex;justify-content:space-between;align-items:center;margin-b
 var admin_u, editing_u = null;
 
 async function doAdminLogin() {{
-    var u = document.getElementById("username").value, p = document.getElementById("password").value;
+    var u = document.getElementById("username").value.trim(), p = document.getElementById("password").value;
     var res = await fetch("/admin/login", {{
         method: "POST", headers: {{"Content-Type": "application/json"}},
         body: JSON.stringify({{username: u, password: p}})
@@ -1063,7 +1063,7 @@ async function doAdminLogin() {{
         document.getElementById("admin-login").style.display = "none";
         document.getElementById("container").style.display = "block";
         loadUsers();
-    }} else document.getElementById("error-msg").innerText = data.msg || "Invalid admin.";
+    }} else document.getElementById("error-msg").innerText = data.msg || "Administrador inválido.";
 }}
 
 async function loadUsers() {{
@@ -1090,7 +1090,7 @@ function renderUsers(users) {{
         let actions = document.createElement("div");
         actions.className = "user-actions";
         actions.innerHTML = `
-            <button class="btn btn-primary" style="padding:8px 12px" onclick="openModal('${{u}}')">Edit</button>
+            <button class="btn btn-primary" style="padding:8px 12px" onclick="openModal('${{u}}')">Editar</button>
             <button class="btn btn-danger" style="padding:8px 12px" onclick="deleteUser('${{u}}')">✕</button>
         `;
         
@@ -1106,18 +1106,18 @@ function openModal(u = null) {{
     document.getElementById("m_u").value = u || "";
     document.getElementById("m_p").value = "";
     if(u) {{
-        document.getElementById("modal-title").innerText = "Edit Student";
-        document.getElementById("modal-desc").innerText = "Leave password blank to keep the current one.";
+        document.getElementById("modal-title").innerText = "Editar Estudante";
+        document.getElementById("modal-desc").innerText = "Deixe a senha em branco para manter a atual.";
     }} else {{
-        document.getElementById("modal-title").innerText = "New Student";
-        document.getElementById("modal-desc").innerText = "Admin: hand over the device to the student.";
+        document.getElementById("modal-title").innerText = "Novo Estudante";
+        document.getElementById("modal-desc").innerText = "Admin: entregue o dispositivo para o estudante.";
     }}
 }}
 
 function closeModal() {{ document.getElementById("modal").style.display = "none"; }}
 
 async function handleModalSave() {{
-    var u = document.getElementById("m_u").value.trim(), p = document.getElementById("m_p").value.trim();
+    var u = document.getElementById("m_u").value.trim(), p = document.getElementById("m_p").value;
     if(!u || (!editing_u && !p)) return;
     var res = await fetch("/admin/save_user", {{
         method: "POST", 
@@ -1129,7 +1129,7 @@ async function handleModalSave() {{
 }}
 
 async function deleteUser(u) {{
-    if(confirm("Delete " + u + "?")) {{
+    if(confirm("Excluir " + u + "?")) {{
         await fetch("/admin/delete_user", {{
             method: "POST", 
             headers: {{"Content-Type": "application/json"}},
