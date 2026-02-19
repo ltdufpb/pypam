@@ -26,9 +26,9 @@ pip install -r requirements.txt
 PyPAM requires an administrator account and a student list. All passwords must be hashed before being placed in the final configuration files.
 
 #### Create Administrator
-Use the hashing filter to create the `admin.txt` file:
+Use the hashing filter to create the `admin.txt` file. **Use single quotes** to prevent your shell from interpreting special characters (like `$` or `&`):
 ```bash
-echo "admin:mypassword" | python3 hash_passwords.py > admin.txt
+echo 'admin:your_complex_password_here' | python3 hash_passwords.py > admin.txt
 ```
 
 #### Create Student List

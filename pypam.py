@@ -289,7 +289,7 @@ async def login(data: dict, request: Request):
     """
     ip = request.client.host
     username = (data.get("username") or "").strip()
-    password = (data.get("password") or "").strip()
+    password = data.get("password") or ""
 
     can_attempt, wait_time = check_brute_force(ip)
     if not can_attempt:
@@ -331,7 +331,8 @@ async def admin_login(data: dict, request: Request):
     """
     ip = request.client.host
     creds = get_admin_creds()
-    username = data.get("username")
+    username = (data.get("username") or "").strip()
+    password = data.get("password") or ""
 
     can_attempt, wait_time = check_brute_force(ip)
     if not can_attempt:
@@ -396,7 +397,11 @@ async def save_user(data: dict, request: Request):
     users = get_allowlist()
     if old_u and old_u in users:
         # Edit existing student logic
-        final_p = new_p if new_p else users[old_u]
+        if new_p:
+            final_p = get_password_hash(new_p)
+        else:
+            final_p = users[old_u]
+
         if old_u != new_u:
             del users[old_u]  # Handle username change
             logger.info(
@@ -411,7 +416,7 @@ async def save_user(data: dict, request: Request):
         # New student logic
         if not new_p:
             return {"success": False, "msg": "Password required"}
-        users[new_u] = new_p
+        users[new_u] = get_password_hash(new_p)
         logger.info(f"New student created: {new_u} (Admin: {u})", extra={"user": u})
 
     save_allowlist(users)
