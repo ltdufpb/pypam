@@ -7,3 +7,4 @@ pytest
 pytest-asyncio
 pytest-timeout
 httpx
+passlib[argon2]

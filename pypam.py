@@ -82,6 +82,23 @@ import shutil
 from fastapi import FastAPI, WebSocket, Request
 from fastapi.responses import HTMLResponse
 from contextlib import asynccontextmanager
+from passlib.context import CryptContext
+
+# --- SECURITY CONTEXT ---
+pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
+
+def verify_password(plain_password, hashed_password):
+    try:
+        # Check if it's a hash (starts with typical argon2 prefix)
+        if not hashed_password.startswith("$argon2"):
+            # Fallback for legacy plaintext passwords
+            return plain_password == hashed_password
+        return pwd_context.verify(plain_password, hashed_password)
+    except Exception:
+        return False
+
+def get_password_hash(password):
+    return pwd_context.hash(password)
 
 
 # --- LOGGING CONFIGURATION ---
@@ -191,12 +208,16 @@ def get_allowlist():
 def save_allowlist(users):
     """
     Persists the student credentials dictionary to the filesystem.
+    Hashes passwords if they are not already hashed.
 
     Args:
-        users (dict): The mapping of {username: password} to save.
+        users (dict): The mapping of {username: password_or_hash} to save.
     """
     with open(ALLOWLIST_FILE, "w") as f:
         for u, p in users.items():
+            # If it's not a argon2 hash, hash it
+            if not p.startswith("$argon2"):
+                p = get_password_hash(p)
             f.write(f"{u}:{p}\n")
 
 
@@ -257,10 +278,18 @@ async def login(data: dict, request: Request):
         return {"success": False, "msg": f"Wait {wait_time}s before trying again."}
 
     users = get_allowlist()
-    if username in users and users[username] == password:
-        logger.info(f"Student Login: {username} (Successful)", extra={"user": username})
-        failed_logins.pop(ip, None)
-        return {"success": True}
+    if username in users:
+        stored_password = users[username]
+        if verify_password(password, stored_password):
+            # Migration: If it was plaintext, save the hash now
+            if not stored_password.startswith("$argon2"):
+                users[username] = get_password_hash(password)
+                save_allowlist(users)
+                logger.info(f"Migrated password for {username} to hash", extra={"user": username})
+
+            logger.info(f"Student Login: {username} (Successful)", extra={"user": username})
+            failed_logins.pop(ip, None)
+            return {"success": True}
 
     # Record failure
     failed_logins[ip]["count"] += 1
@@ -293,7 +322,7 @@ async def admin_login(data: dict, request: Request):
         )
         return {"success": False, "msg": f"Wait {wait_time}s before trying again."}
 
-    if username == u and data.get("password") == p:
+    if username == u and verify_password(data.get("password"), p):
         logger.info(f"Admin Login: {username} (Successful)", extra={"user": username})
         failed_logins.pop(ip, None)
         return {"success": True}
@@ -440,7 +469,7 @@ async def run_code(ws: WebSocket):
                 return
 
             # Security double-check: verify credentials again within the socket
-            if username not in users or users[username] != password:
+            if username not in users or not verify_password(password, users[username]):
                 # Record failure
                 failed_logins[ip]["count"] += 1
                 failed_logins[ip]["last_attempt"] = time.time()
@@ -1055,13 +1084,20 @@ function renderUsers(users) {{
     users.forEach(u => {{
         let div = document.createElement("div");
         div.className = "user-card";
-        div.innerHTML = `
-            <div class="user-info">${{u}}</div>
-            <div class="user-actions">
-                <button class="btn btn-primary" style="padding:8px 12px" onclick="openModal('${{u}}')">Edit</button>
-                <button class="btn btn-danger" style="padding:8px 12px" onclick="deleteUser('${{u}}')">✕</button>
-            </div>
+        // Create elements securely to prevent XSS
+        let info = document.createElement("div");
+        info.className = "user-info";
+        info.innerText = u; // Safe text content
+
+        let actions = document.createElement("div");
+        actions.className = "user-actions";
+        actions.innerHTML = `
+            <button class="btn btn-primary" style="padding:8px 12px" onclick="openModal('${{u}}')">Edit</button>
+            <button class="btn btn-danger" style="padding:8px 12px" onclick="deleteUser('${{u}}')">✕</button>
         `;
+        
+        div.appendChild(info);
+        div.appendChild(actions);
         list.appendChild(div);
     }});
 }}
