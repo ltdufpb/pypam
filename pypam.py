@@ -356,7 +356,7 @@ except Exception as e:
 # Initialize the semaphore to enforce the concurrency limit
 user_lock = asyncio.Semaphore(MAX_CONCURRENT_USERS)
 app = FastAPI(lifespan=lifespan)
-app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
+app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax")
 
 
 # --- GLOBAL ERROR HANDLING ---
@@ -416,6 +416,21 @@ async def login(data: dict, request: Request):
         extra={"user": username},
     )
     return {"success": False}
+
+
+@app.get("/me")
+async def me(request: Request):
+    username = request.session.get("user")
+    role = request.session.get("role")
+    if username and role == "student":
+        return {"authenticated": True, "username": username}
+    return {"authenticated": False}
+
+
+@app.post("/logout")
+async def logout(request: Request):
+    request.session.clear()
+    return {"success": True}
 
 
 @app.post("/admin/login")
@@ -559,8 +574,7 @@ async def run_code(ws: WebSocket):
 
     if not username or role != "student":
         logger.warning("Unauthorized WebSocket access attempt")
-        await ws.send_json({"t": "out", "d": "\n[Access Denied] Please login.\n"})
-        await ws.send_json({"t": "end", "c": 1})
+        await ws.send_json({"t": "auth_error"})
         await ws.close()
         return
 
@@ -1011,12 +1025,13 @@ async function doLogin() {{
     }} catch(e) {{ document.getElementById("error-msg").innerText = "Erro de conexão."; }}
 }}
 
-function doLogout() {{
+async function doLogout() {{
     if(confirm("Deseja realmente sair?")) {{
+        await fetch("/logout", {{method: "POST"}});
         localStorage.removeItem("pypam_u");
-        // To fully logout, we should ideally call a /logout endpoint to clear the session.
-        // For now, removing the local identifier and redirecting is enough for the UI.
-        location.reload(); 
+        document.getElementById("username").value = "";
+        document.getElementById("password").value = "";
+        showView("login-view");
     }}
 }}
 
@@ -1026,14 +1041,20 @@ function clearEditor() {{
     }}
 }}
 
-function initApp() {{
-    var u = localStorage.getItem("pypam_u");
-    if(u) {{ showView("editor-view"); }}
-    else {{ 
-        document.getElementById("username").value = ""; 
-        document.getElementById("password").value = ""; 
-        showView("login-view"); 
-    }}
+async function initApp() {{
+    try {{
+        var res = await fetch("/me");
+        var data = await res.json();
+        if(data.authenticated) {{
+            localStorage.setItem("pypam_u", data.username);
+            showView("editor-view");
+        }} else {{
+            localStorage.removeItem("pypam_u");
+            document.getElementById("username").value = "";
+            document.getElementById("password").value = "";
+            showView("login-view");
+        }}
+    }} catch(e) {{ showView("login-view"); }}
 }}
 
 function start(){{
@@ -1053,10 +1074,17 @@ function start(){{
     ws.onmessage=function(e){{
         var m=JSON.parse(e.data);
         if(m.t==="out") processTermData(m.d);
-        else if(m.t==="end"){{ 
-            append("\\n\\n[Status: "+m.c+"]"); 
-            removeCursor(); 
-            ws.close(); 
+        else if(m.t==="auth_error"){{
+            ws.close(); ws=null;
+            localStorage.removeItem("pypam_u");
+            document.getElementById("username").value = "";
+            document.getElementById("password").value = "";
+            showView("login-view");
+        }}
+        else if(m.t==="end"){{
+            append("\\n\\n[Status: "+m.c+"]");
+            removeCursor();
+            ws.close();
         }}
     }};
 }}
