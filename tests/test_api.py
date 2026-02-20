@@ -109,3 +109,24 @@ async def test_admin_user_management():
         # Verify user was deleted
         response = await ac.post("/admin/get_users")
         assert "newstudent" not in response.json()["users"]
+
+
+@pytest.mark.asyncio
+async def test_logout():
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        # Login to establish a session
+        await ac.post("/login", json={"username": "testuser", "password": "testpass"})
+
+        # Session should be active
+        response = await ac.get("/me")
+        assert response.json() == {"authenticated": True, "username": "testuser"}
+
+        # Logout should succeed and clear the session
+        response = await ac.post("/logout")
+        assert response.json() == {"success": True}
+
+        # Session should now be gone
+        response = await ac.get("/me")
+        assert response.json() == {"authenticated": False}
