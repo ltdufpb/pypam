@@ -71,6 +71,8 @@ Layer 5: Process Privilege
 """
 
 import os
+import ast
+import json
 import asyncio
 import docker
 import logging
@@ -167,6 +169,18 @@ DISK_LIMIT = "10m"
 # CPU_LIMIT_NANO: CPU limit in nanoseconds (0.20 = 20% of one core).
 CPU_LIMIT_NANO = int(0.20 * 1e9)
 
+SECCOMP_PROFILE_PATH = os.path.join(os.path.dirname(__file__), "seccomp_no_exec.json")
+
+try:
+    with open(SECCOMP_PROFILE_PATH) as _f:
+        SECCOMP_PROFILE_JSON = json.dumps(json.load(_f))
+except FileNotFoundError:
+    logger.critical(
+        f"seccomp profile not found at {SECCOMP_PROFILE_PATH}. "
+        "Process execution inside containers will NOT be blocked."
+    )
+    SECCOMP_PROFILE_JSON = None
+
 # EXECUTION_TIMEOUT: Max time a script can run (in seconds).
 # Increased to 300s (5m) to allow slow typing during input().
 EXECUTION_TIMEOUT = int(os.getenv("EXECUTION_TIMEOUT", 300))
@@ -190,6 +204,83 @@ def check_brute_force(ip: str):
     if count >= MAX_FAILED_ATTEMPTS:
         return False, BRUTE_FORCE_COOLDOWN // 60
     return True, 0
+
+
+# --- AST CODE SAFETY CHECKER ---
+
+_FORBIDDEN_MODULES = frozenset({"subprocess", "ctypes", "importlib", "multiprocessing"})
+_FORBIDDEN_BUILTINS = frozenset({"eval", "exec", "compile", "__import__"})
+_FORBIDDEN_ATTRS = frozenset({
+    "system", "popen",
+    "execl", "execle", "execlp", "execlpe",
+    "execv", "execve", "execvp", "execvpe",
+    "spawnl", "spawnle", "spawnlp", "spawnlpe",
+    "spawnv", "spawnve", "spawnvp", "spawnvpe",
+    "fork", "forkpty", "posix_spawn", "posix_spawnp",
+    "__subclasses__",
+})
+
+
+def check_code_safety(code: str) -> str | None:
+    """
+    AST-based pre-execution check. Returns a Portuguese error string if
+    dangerous patterns are found, or None if code appears safe.
+    SyntaxErrors pass through so Python reports them naturally.
+
+    Note: Primary kernel-level defense is the seccomp profile (Layer A).
+    This function is Layer B: user-facing feedback.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None  # Let the container report syntax errors naturally
+
+    for node in ast.walk(tree):
+        # import subprocess / import ctypes / import importlib
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root = alias.name.split(".")[0]
+                if root in _FORBIDDEN_MODULES:
+                    return (
+                        f"[Código Bloqueado] Uso do módulo '{root}' "
+                        "não é permitido neste ambiente."
+                    )
+
+        # from subprocess import run
+        elif isinstance(node, ast.ImportFrom):
+            if node.module:
+                root = node.module.split(".")[0]
+                if root in _FORBIDDEN_MODULES:
+                    return (
+                        f"[Código Bloqueado] Uso do módulo '{root}' "
+                        "não é permitido neste ambiente."
+                    )
+
+        # __import__(...) / eval(...) / exec(...) / compile(...)
+        elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name):
+                if node.func.id in _FORBIDDEN_BUILTINS:
+                    return (
+                        f"[Código Bloqueado] Chamada à função '{node.func.id}' "
+                        "não é permitida neste ambiente."
+                    )
+            # os.system(...) / os.popen(...) / x.__subclasses__() / etc.
+            elif isinstance(node.func, ast.Attribute):
+                if node.func.attr in _FORBIDDEN_ATTRS:
+                    return (
+                        f"[Código Bloqueado] Uso de '{node.func.attr}' "
+                        "não é permitido neste ambiente."
+                    )
+
+        # x.__subclasses__ (reference without call)
+        elif isinstance(node, ast.Attribute):
+            if node.attr in _FORBIDDEN_ATTRS:
+                return (
+                    f"[Código Bloqueado] Uso de '{node.attr}' "
+                    "não é permitido neste ambiente."
+                )
+
+    return None
 
 
 # --- AUTHENTICATION STATE ---
@@ -503,6 +594,17 @@ async def run_code(ws: WebSocket):
                 )
                 return
 
+            # --- Layer B: AST safety check BEFORE writing to disk ---
+            safety_error = check_code_safety(code)
+            if safety_error is not None:
+                logger.warning(
+                    f"MISBEHAVIOR: Blocked code from {username}: {safety_error}",
+                    extra={"user": username},
+                )
+                await ws.send_json({"t": "out", "d": f"\n{safety_error}\n"})
+                await ws.send_json({"t": "end", "c": 1})
+                return
+
             # Persist the student's code to the sandbox directory
             script_path = os.path.join(temp_dir, "script.py")
             with open(script_path, "w", encoding="utf-8") as f:
@@ -511,6 +613,12 @@ async def run_code(ws: WebSocket):
 
             # Define the sandbox container
             logger.info(f"Spawning container for {username}", extra={"user": username})
+
+            # Layer A: kernel-level seccomp + privilege escalation prevention
+            _security_opt = ["no-new-privileges:true"]
+            if SECCOMP_PROFILE_JSON is not None:
+                _security_opt.append(f"seccomp={SECCOMP_PROFILE_JSON}")
+
             container = client.containers.create(
                 DOCKER_IMAGE,
                 command=["python3", "-u", "/app/script.py"],  # -u disables buffering
@@ -532,6 +640,7 @@ async def run_code(ws: WebSocket):
                 # Mount the script as read-only on top of the tmpfs
                 volumes={script_path: {"bind": "/app/script.py", "mode": "ro"}},
                 user="65534:65534",  # Run as 'nobody' (unprivileged)
+                security_opt=_security_opt,
                 environment={"PYTHONIOENCODING": "utf-8", "PYTHON_COLORS": "0"},
             )
 

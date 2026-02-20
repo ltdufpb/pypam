@@ -22,6 +22,15 @@ HARDENING_TESTS = {
     # === 4. DANGEROUS IMPORTS & BUILTINS ===
     "importlib_bypass": "import importlib\ntry:\n    importlib.import_module('os').system('id')\nexcept Exception as e: print(f'Blocked: {e}')",
     "dunder_import": "__import__('os').system('id')",
+    # === 5. SHELL SPAWN ATTACKS ===
+    "spawn_subprocess_direct": "import subprocess\nsubprocess.run(['sh'], shell=True)",
+    "spawn_dunder_import": "__import__('sub' + 'process').run(['sh'], shell=True)",
+    "spawn_subclasses": (
+        "for cls in ().__class__.__base__.__subclasses__():\n"
+        "    if cls.__name__ == 'Popen':\n"
+        "        cls(['sh'], shell=True)"
+    ),
+    "spawn_os_system": "import os\nos.system('sh')",
 }
 
 
@@ -98,10 +107,17 @@ def test_security_hardening_scenarios(test_name):
                 or "Network is unreachable" in output_str
             )
         elif "os_system" in test_name:
-            # Should run as 'nobody' (UID 65534)
-            assert "uid=65534(nobody)" in output_str
-            # And it should NOT be root
+            # Now blocked by AST check (Layer B) before running
+            assert "[Código Bloqueado]" in output_str
             assert "uid=0(root)" not in output_str
+        elif "dunder_import" in test_name:
+            # __import__() blocked by AST check (Layer B)
+            assert "[Código Bloqueado]" in output_str
+            assert exit_code == 1
+        elif "spawn_" in test_name:
+            # All spawn_* tests are caught by the AST check (Layer B)
+            assert "[Código Bloqueado]" in output_str
+            assert exit_code == 1
         elif "read_passwd" in test_name:
             # Reading /etc/passwd is allowed in Alpine, but it's the container's
             assert "root:x:0:0:root" in output_str
