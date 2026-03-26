@@ -152,6 +152,10 @@ async def lifespan(app: FastAPI):
 # PORT: The port the FastAPI server will listen on.
 PORT = int(os.getenv("PORT", 8000))
 
+# HTTPS_ENABLED: Set to "true" when behind an HTTPS reverse proxy (e.g. nginx).
+# This ensures session cookies are marked as secure (sent only over HTTPS).
+HTTPS_ENABLED = os.getenv("HTTPS_ENABLED", "false").lower() == "true"
+
 # DOCKER_IMAGE: A lightweight Python image. Alpine is used for fast startup.
 DOCKER_IMAGE = "python:3.13-alpine"
 
@@ -356,7 +360,12 @@ except Exception as e:
 # Initialize the semaphore to enforce the concurrency limit
 user_lock = asyncio.Semaphore(MAX_CONCURRENT_USERS)
 app = FastAPI(lifespan=lifespan)
-app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax")
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SECRET_KEY,
+    same_site="lax",
+    https_only=HTTPS_ENABLED,
+)
 
 
 # --- GLOBAL ERROR HANDLING ---

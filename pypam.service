@@ -20,6 +20,7 @@ StandardError=journal
 
 # Ensure Python doesn't buffer logs
 Environment=PORT=8000
+Environment=HTTPS_ENABLED=true
 Environment=PYTHONUNBUFFERED=1
 
 [Install]

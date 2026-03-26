@@ -26,6 +26,7 @@ nosetests.xml
 coverage.xml
 *.stats
 *.conf
+!nginx/*.conf
 *.cur
 .ruff_cache/
 
