@@ -52,6 +52,30 @@ sudo systemctl enable pypam
 sudo systemctl start pypam
 ```
 
+### 5. Enable HTTPS (Recommended)
+PyPAM uses **nginx** as a reverse proxy for SSL termination with free **Let's Encrypt** certificates. The setup script handles everything:
+
+```bash
+sudo ./setup-https.sh your-email@example.com
+```
+
+This will:
+- Install nginx and certbot
+- Obtain an SSL certificate for your domain
+- Configure nginx to proxy HTTP (port 80) → HTTPS (port 443) → PyPAM (port 8000)
+- Set up automatic certificate renewal
+
+After running the script, reload the systemd service to enable secure session cookies:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart pypam
+```
+
+> **Note:** Before running the script, make sure ports **80** and **443** are open in your cloud provider's security list/firewall rules.
+
+#### Custom Domain
+By default, the nginx config uses `a88aec8c.sslip.io`. To use a different domain, edit `nginx/pypam.conf` and replace the `server_name` and certificate paths, then re-run the setup script.
+
 ---
 
 ## 🛠️ Management Commands
@@ -63,10 +87,14 @@ sudo systemctl start pypam
 | **Restart App** | `sudo systemctl restart pypam` |
 | **Stop App** | `sudo systemctl stop pypam` |
 | **View Crash Logs** | `sudo journalctl -u pypam --since "1 hour ago"` |
+| **Check Certificate** | `sudo certbot certificates` |
+| **Test Renewal** | `sudo certbot renew --dry-run` |
 
 ---
 
 ## 🔒 Security Features
+- **HTTPS**: TLS encryption via nginx + Let's Encrypt with automatic certificate renewal.
+- **Secure Cookies**: Session cookies are marked `https_only` when `HTTPS_ENABLED=true`.
 - **Container Isolation**: Students run inside Docker `python:alpine` containers.
 - **Resource Caps**: Limited to 48MB RAM and 20% CPU.
 - **Network Disabled**: Containers have no internet/LAN access.
