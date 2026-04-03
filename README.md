@@ -78,6 +78,20 @@ By default, the nginx config uses `a88aec8c.sslip.io`. To use a different domain
 
 ---
 
+## 🔄 Updating PyPAM
+
+To update a running instance to the latest version:
+
+```bash
+cd pypam
+git pull
+source .venv/bin/activate
+pip install -r requirements.txt
+sudo systemctl restart pypam
+```
+
+---
+
 ## 🛠️ Management Commands
 
 | Action | Command |
