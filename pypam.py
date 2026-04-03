@@ -974,7 +974,7 @@ editor = CodeMirror.fromTextArea(document.getElementById("code-editor"), {{
     smartIndent: true,
     tabSize: 4,
     indentWithTabs: false,
-    inputStyle: "contenteditable", // contenteditable handles line breaks better on Android/SwiftKey
+    inputStyle: "textarea",
     extraKeys: {{"Tab": function(cm) {{ cm.replaceSelection("    ", "end"); }} }},
     viewportMargin: Infinity,
     autocapitalize: false,
@@ -1009,10 +1009,11 @@ termInput.onkeydown = (e) => {{
 // Handles characters sent by mobile predictive text/autocorrect
 termInput.oninput = (e) => {{
     if(!ws || ws.readyState!==1) return;
-    if(e.inputType === "insertText" && e.data) {{
-        ws.send(JSON.stringify({{t:"in", d:e.data}}));
+    var val = e.data || termInput.value;
+    if(val) {{
+        ws.send(JSON.stringify({{t:"in", d:val}}));
     }}
-    termInput.value = ""; // Clear proxy immediately
+    termInput.value = "";
 }};
 
 async function doLogin() {{
