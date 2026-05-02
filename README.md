@@ -92,6 +92,42 @@ sudo systemctl restart pypam
 
 ---
 
+## 🎓 New Term: Updating the Student Roster
+
+At the start of each new term, replace the live student list with the new cohort. Last term's students will lose access; the new cohort will be able to log in immediately — **no service restart needed** (PyPAM re-reads `students.txt` on every login).
+
+### 1. Obtain the new term's roster
+Save the roster from SIGAA as `students_table.txt` in your local clone, with the student ID in the **2nd column** (existing convention).
+
+### 2. Regenerate `students.txt` locally
+```bash
+cat students_table.txt | python3 create_student_passwords.py | python3 hash_passwords.py > students.txt
+```
+
+### 3. Transfer the file to the live server
+```bash
+scp students.txt ubuntu@<HOST>:/tmp/students.txt.new
+```
+
+### 4. Back up and atomically swap on the live server
+```bash
+ssh ubuntu@<HOST>
+cd /home/ubuntu/pypam
+cp students.txt students.txt.bak.$(date +%Y%m%d-%H%M%S)
+mv /tmp/students.txt.new students.txt
+wc -l students.txt   # should match the local file's line count
+```
+
+The backup (`students.txt.bak.YYYYMMDD-HHMMSS`) is your rollback if anything looks wrong — `mv students.txt.bak.<timestamp> students.txt` restores it.
+
+### 5. Verify
+Log in to PyPAM as one of the newly enrolled student IDs (password = ID reversed) to confirm the swap took effect.
+
+### Adding only a few students
+If you just need to add one or two students mid-term (rather than rolling over the whole cohort), log in to the admin portal at `/admin` and use the **"+ NOVO"** button — it writes to the same `students.txt` file.
+
+---
+
 ## 🛠️ Management Commands
 
 | Action | Command |
