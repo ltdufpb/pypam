@@ -3,7 +3,8 @@ import asyncio
 import json
 import os
 from fastapi.testclient import TestClient
-from pypam import app, ALLOWLIST_FILE
+from pypam import app
+from database.auth_store import ALLOWLIST_FILE
 
 
 # Helper to read payload files

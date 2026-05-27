@@ -1,9 +1,11 @@
+from database import auth_store
 import pytest
 import asyncio
 import os
 import importlib
 from fastapi.testclient import TestClient
 import pypam
+from database.auth_store import ALLOWLIST_FILE
 
 # Security tests from the provided example
 HARDENING_TESTS = {
@@ -45,11 +47,11 @@ def setup_pypam(monkeypatch):
     monkeypatch.setenv("EXECUTION_TIMEOUT", "10")
     importlib.reload(pypam)
 
-    with open(pypam.ALLOWLIST_FILE, "w") as f:
+    with open(ALLOWLIST_FILE, "w") as f:
         f.write(f"testuser:{ph.hash('testpass')}\n")
     yield
-    if os.path.exists(pypam.ALLOWLIST_FILE):
-        os.remove(pypam.ALLOWLIST_FILE)
+    if os.path.exists(ALLOWLIST_FILE):
+        os.remove(ALLOWLIST_FILE)
 
 
 @pytest.mark.parametrize("test_name", HARDENING_TESTS.keys())

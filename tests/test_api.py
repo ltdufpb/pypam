@@ -1,6 +1,7 @@
 import pytest
 from httpx import AsyncClient, ASGITransport
-from pypam import app, ALLOWLIST_FILE, ADMIN_CREDS_FILE
+from pypam import app
+from database.auth_store import ALLOWLIST_FILE, ADMIN_CREDS_FILE
 import os
 import shutil
 

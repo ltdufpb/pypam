@@ -5,7 +5,12 @@ import time
 import importlib
 from fastapi.testclient import TestClient
 import pypam
+from database.auth_store import ALLOWLIST_FILE
+from core import config
+from core import security
+from cachetools import TTLCache
 
+from routers import auth
 
 from argon2 import PasswordHasher
 
@@ -14,21 +19,29 @@ ph = PasswordHasher()
 
 @pytest.fixture(autouse=True)
 def setup_brute_force(monkeypatch):
-    # Set very short limits for quick testing using environment variables
-    monkeypatch.setenv("MAX_FAILED_ATTEMPTS", "2")
-    monkeypatch.setenv("BRUTE_FORCE_COOLDOWN", "2")
 
-    # Reload pypam to apply the new environment variables
-    importlib.reload(pypam)
+    monkeypatch.setattr(config, "MAX_FAILED_ATTEMPTS", 2)
+    monkeypatch.setattr(config, "BRUTE_FORCE_COOLDOWN", 60)
+    
+    
+    monkeypatch.setattr(security, "MAX_FAILED_ATTEMPTS", 2)
+    monkeypatch.setattr(security, "BRUTE_FORCE_COOLDOWN", 60)
 
-    # Clear the failed logins tracking for each test (it's a global in the module)
-    pypam.failed_logins.clear()
+   
+    nova_cache = TTLCache(maxsize=1000, ttl=2)
 
-    with open(pypam.ALLOWLIST_FILE, "w") as f:
+   
+    monkeypatch.setattr(security, "failed_logins", nova_cache)
+    monkeypatch.setattr(auth, "failed_logins", nova_cache)
+
+   
+    with open(ALLOWLIST_FILE, "w") as f:
         f.write(f"testuser:{ph.hash('testpass')}\n")
+        
     yield
-    if os.path.exists(pypam.ALLOWLIST_FILE):
-        os.remove(pypam.ALLOWLIST_FILE)
+    
+    if os.path.exists(ALLOWLIST_FILE):
+        os.remove(ALLOWLIST_FILE)
 
 
 def test_login_brute_force_protection():
