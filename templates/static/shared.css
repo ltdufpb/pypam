@@ -1,0 +1,135 @@
+:root {
+    --primary: #007acc;
+    --success: #28a745;
+    --danger: #d73a49;
+    --secondary: #e9ecef;
+    --secondary-text: #495057;
+    --bg-gray: #f8f9fa;
+    --border: #dee2e6;
+    --text: #1c1e21;
+    --radius: 12px;
+}
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+body {
+    height: 100vh;
+    overflow: hidden;
+    background: var(--bg-gray);
+    font-family: system-ui, -apple-system, sans-serif;
+    color: var(--text);
+}
+.view-container {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: none;
+    flex-direction: column;
+}
+.login-screen {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+}
+.login-box {
+    background: #fff;
+    padding: 40px;
+    border-radius: 16px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+    text-align: center;
+    width: 90%;
+    max-width: 400px;
+}
+h2 {
+    margin-bottom: 24px;
+    font-size: 24px;
+    font-weight: 600;
+}
+input, .btn {
+    font-family: inherit;
+    padding: 12px 16px;
+    margin: 8px 0;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    outline: none;
+    font-size: 16px;
+}
+input[type="text"], input[type="password"] {
+    width: 100%;
+    background: #fff;
+    color: var(--text);
+    transition: border-color 0.2s;
+}
+input:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(0,122,204,0.1);
+}
+.btn {
+    cursor: pointer;
+    font-weight: 600;
+    transition: all 0.2s;
+    text-align: center;
+    border: none;
+}
+.btn-primary { background: var(--primary); color: #fff; width: 100%; }
+.btn-primary:hover { opacity: 0.9; }
+.btn-success { background: var(--success); color: #fff; }
+.btn-success:hover { opacity: 0.9; }
+.btn-danger { background: var(--danger); color: #fff; }
+.btn-danger:hover { opacity: 0.9; }
+.btn-secondary { background: var(--secondary); color: var(--secondary-text); }
+.btn-secondary:hover { background: #dde1e3; }
+
+.app-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 15px;
+    background: var(--secondary);
+    border-bottom: 1px solid var(--border);
+}
+.user-label {
+    color: var(--secondary-text);
+    font-weight: 600;
+    font-size: 14px;
+}
+.logout-btn {
+    background: none;
+    border: none;
+    color: var(--secondary-text);
+    cursor: pointer;
+    font-size: 18px;
+    padding: 4px;
+    display: flex;
+    align-items: center;
+}
+
+/* CodeMirror Integration styles */
+.CodeMirror {
+    height: 100%;
+    font-family: "Fira Code", monospace;
+    font-size: 14px;
+    line-height: 1.6;
+    background: #fff;
+}
+.CodeMirror-gutters {
+    background: #f8f9fa;
+    border-right: 1px solid #e5e7eb;
+}
+.CodeMirror-linenumber {
+    color: #adb5bd;
+    padding: 0 8px;
+}
+.cm-s-default .cm-keyword { color: #0000ff; font-weight: bold; }
+.cm-s-default .cm-string { color: #a31515; }
+.cm-s-default .cm-comment { color: #008000; font-style: italic; }
+.cm-s-default .cm-variable-2 { color: #001080; }
+.cm-s-default .cm-def { color: #795e26; }
+.cm-s-default .cm-builtin { color: #0000ff; }
+.cm-s-default .cm-number { color: #098658; }
+.cm-s-default .cm-operator { color: #333; }

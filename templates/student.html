@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=yes">
+    <title>PyPAM - Editor de Python Online do Prof. Alan Moraes</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.css">
+    <link rel="stylesheet" href="/static/shared.css">
+    <style>
+        #editor-container { flex: 1; overflow: hidden; background: #fff; position: relative; }
+        #terminal { flex: 1; padding: 20px; font-family: "Fira Code", monospace; font-size: 14px; line-height: 1.6; color: #333; background: #f9fafb; white-space: pre-wrap; word-break: break-word; outline: none; overflow-y: auto; }
+        #run, #back { width: 100%; border-radius: 0; margin: 0; padding: 16px; font-size: 16px; }
+        .cursor { display: inline-block; width: 8px; height: 1.2em; background: #333; vertical-align: middle; animation: b 1s step-end infinite; }
+        @keyframes b { 50% { opacity: 0; } }
+    </style>
+</head>
+<body>
+
+<div id="login-view" class="view-container">
+    <div class="login-screen">
+        <div class="login-box">
+            <h2>Acesso do Estudante</h2>
+            <input type="text" id="username" placeholder="Usuário" autocomplete="username" autocapitalize="none" autocorrect="off" onkeydown="if(event.key==='Enter') doLogin()">
+            <input type="password" id="password" placeholder="Senha" autocomplete="current-password" onkeydown="if(event.key==='Enter') doLogin()">
+            <button class="btn btn-primary" onclick="doLogin()">ENTRAR</button>
+            <div id="error-msg" style="color:var(--danger); font-size:14px; margin-top:12px; height:1.4em;"></div>
+        </div>
+    </div>
+</div>
+
+<div id="editor-view" class="view-container">
+    <div class="app-header">
+        <span class="user-display"></span>
+        <div style="display:flex; gap:10px;">
+            <button class="logout-btn" title="Limpar código" onclick="clearEditor()">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 3 21 3 19 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+            </button>
+            <button class="logout-btn" title="Sair" onclick="doLogout()">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+            </button>
+        </div>
+    </div>
+    <div id="editor-container">
+        <textarea id="code-editor"></textarea>
+    </div>
+    <button id="run" class="btn btn-success" onclick="start()">▶ EXECUTAR</button>
+</div>
+
+<div id="terminal-view" class="view-container">
+    <div class="app-header">
+        <span class="user-display"></span>
+        <div style="display:flex; gap:10px;">
+            <button class="logout-btn" title="Limpar código" onclick="clearEditor()">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 3 21 3 19 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+            </button>
+            <button class="logout-btn" title="Sair" onclick="doLogout()">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+            </button>
+        </div>
+    </div>
+    <div id="terminal" tabindex="0"></div>
+    <input type="text" id="term-input" style="position:absolute; opacity:0; pointer-events:none; left:-9999px;" autocapitalize="none" autocorrect="off" autocomplete="off" spellcheck="false">
+    <button id="back" class="btn btn-secondary" onclick="back()">← Voltar</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/python/python.min.js"></script>
+<script>
+    var ws, term = document.getElementById("terminal"), termInput = document.getElementById("term-input"), editor;
+
+    editor = CodeMirror.fromTextArea(document.getElementById("code-editor"), {
+        mode: "python",
+        lineNumbers: true,
+        indentUnit: 4,
+        smartIndent: true,
+        tabSize: 4,
+        indentWithTabs: false,
+        inputStyle: "textarea",
+        extraKeys: {"Tab": function(cm) { cm.replaceSelection("    ", "end"); } },
+        viewportMargin: Infinity,
+        autocapitalize: false,
+        spellcheck: false,
+        autocorrect: false
+    });
+
+    function showView(id) {
+        document.querySelectorAll(".view-container").forEach(d => d.style.display = "none");
+        var target = document.getElementById(id);
+        target.style.display = "flex";
+        var u = localStorage.getItem("pypam_u");
+        if(u) { target.querySelectorAll(".user-display").forEach(el => el.innerText = u); }
+        if(id === "editor-view") setTimeout(() => editor.refresh(), 10);
+        if(id === "terminal-view") setTimeout(() => termInput.focus(), 50);
+    }
+
+    term.onclick = () => termInput.focus();
+
+    termInput.onkeydown = (e) => {
+        if(!ws || ws.readyState !== 1) return;
+        if(e.key === "Enter") ws.send(JSON.stringify({t:"in", d:"\n"}));
+        else if(e.key === "Backspace") ws.send(JSON.stringify({t:"in", d:"\x7f"}));
+        else if(e.ctrlKey && e.key === "c") ws.send(JSON.stringify({t:"in", d:"\x03"}));
+    };
+
+    termInput.oninput = (e) => {
+        if(!ws || ws.readyState !== 1) return;
+        var val = e.data || termInput.value;
+        if(val) {
+            ws.send(JSON.stringify({t:"in", d:val}));
+        }
+        termInput.value = "";
+    };
+
+    async function doLogin() {
+        var u = document.getElementById("username").value.trim();
+        var p = document.getElementById("password").value;
+        if(!u || !p) return;
+        try {
+            var res = await fetch("/login", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({username: u, password: p})
+            });
+            var data = await res.json();
+            if(data.success) {
+                localStorage.setItem("pypam_u", u);
+                initApp();
+            } else { document.getElementById("error-msg").innerText = data.msg || "Usuário ou senha inválidos."; }
+        } catch(e) { document.getElementById("error-msg").innerText = "Erro de conexão."; }
+    }
+
+    async function doLogout() {
+        if(confirm("Deseja realmente sair?")) {
+            await fetch("/logout", {method: "POST"});
+            localStorage.removeItem("pypam_u");
+            document.getElementById("username").value = "";
+            document.getElementById("password").value = "";
+            showView("login-view");
+        }
+    }
+
+    function clearEditor() {
+        if(confirm("Deseja realmente limpar todo o código?")) {
+            editor.setValue("");
+        }
+    }
+
+    async function initApp() {
+        try {
+            var res = await fetch("/me");
+            var data = await res.json();
+            if(data.authenticated) {
+                localStorage.setItem("pypam_u", data.username);
+                showView("editor-view");
+            } else {
+                localStorage.removeItem("pypam_u");
+                document.getElementById("username").value = "";
+                document.getElementById("password").value = "";
+                showView("login-view");
+            }
+        } catch(e) { showView("login-view"); }
+    }
+
+    function start(){
+        var code = editor.getValue();
+        showView("terminal-view");
+        term.innerHTML = ""; term.focus();
+        
+        var proto = location.protocol === "https:" ? "wss:" : "ws:";
+        ws = new WebSocket(proto + "//" + location.host + "/ws");
+        
+        ws.onopen = function(){ 
+            addCursor(); 
+            ws.send(JSON.stringify({code: code})); 
+        };
+        
+        ws.onmessage = function(e){
+            var m = JSON.parse(e.data);
+            if(m.t === "out") processTermData(m.d);
+            else if(m.t === "auth_error"){
+                ws.close(); ws = null;
+                localStorage.removeItem("pypam_u");
+                document.getElementById("username").value = "";
+                document.getElementById("password").value = "";
+                showView("login-view");
+            }
+            else if(m.t === "end"){
+                append("\n\n[Status: " + m.c + "]");
+                removeCursor();
+                ws.close();
+            }
+        };
+    }
+
+    function processTermData(text) {
+        text = text.replace(/\r/g, "");
+        for (var i = 0; i < text.length; i++) {
+            var char = text[i];
+            if (char === "\b" || char === "\x08" || char === "\x7f") { removeLast(); } 
+            else { appendChar(char); }
+        }
+        term.scrollTop = term.scrollHeight;
+    }
+
+    function appendChar(char){ 
+        var c = document.getElementById("cur"); 
+        c.parentNode.insertBefore(document.createTextNode(char), c); 
+    }
+
+    function append(txt) { processTermData(txt); }
+
+    function removeLast(){
+        var c = document.getElementById("cur");
+        while (c.previousSibling) {
+            var node = c.previousSibling;
+            if (node.nodeType === 3) { 
+                if (node.length > 0) { node.deleteData(node.length - 1, 1); return; } 
+                else { node.remove(); }
+            } else { return; }
+        }
+    }
+
+    function back(){ if(ws){ws.close(); ws = null;} showView("editor-view"); }
+
+    function addCursor(){ 
+        var c = document.createElement("span"); 
+        c.className = "cursor"; 
+        c.id = "cur"; 
+        term.appendChild(c); 
+    }
+
+    function removeCursor(){ 
+        var c = document.getElementById("cur"); 
+        if(c) c.remove(); 
+    }
+
+    initApp();
+</script>
+</body>
+</html>
