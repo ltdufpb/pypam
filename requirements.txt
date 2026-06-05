@@ -10,3 +10,4 @@ httpx
 argon2-cffi
 itsdangerous
 cachetools
+jinja2
