@@ -370,7 +370,12 @@ app.add_middleware(
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # Jinja2 templates directory
-templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
+_templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
+
+# Dependency provider used to inject the shared Jinja2Templates
+# instance into route handlers.
+def get_templates() -> Jinja2Templates:
+    return _templates
 
 
 
@@ -838,11 +843,11 @@ async def run_code(ws: WebSocket):
 
 
 @app.get("/", response_class=HTMLResponse)
-async def home(request: Request) -> HTMLResponse:
+def home(request: Request, templates: Jinja2Templates = Depends(get_templates)) -> HTMLResponse:
     return templates.TemplateResponse(request=request, name="index.html")
 
 @app.get("/admin", response_class=HTMLResponse)
-async def admin(request: Request) -> HTMLResponse:
+def admin(request: Request, templates: Jinja2Templates = Depends(get_templates)) -> HTMLResponse:
     return templates.TemplateResponse(request=request, name="admin.html")
 
 
