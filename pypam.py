@@ -89,6 +89,7 @@ from argon2.exceptions import VerifyMismatchError
 from starlette.middleware.sessions import SessionMiddleware
 from fastapi.templating import Jinja2Templates
 from cachetools import TTLCache
+from fastapi.staticfiles import StaticFiles
 
 # --- SECURITY CONTEXT ---
 # SECRET_KEY: Used to sign session cookies.
@@ -371,6 +372,9 @@ app.add_middleware(
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # Jinja2 templates directory
 _templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
+
+# access to the application's static files
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Dependency provider used to inject the shared Jinja2Templates
 # instance into route handlers.

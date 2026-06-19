@@ -1,0 +1,88 @@
+:root {
+    --primary: #007acc;
+    --success: #28a745;
+    --danger: #d73a49;
+    --secondary: #e9ecef;
+    --secondary-text: #495057;
+    --bg-gray: #f8f9fa;
+    --border: #dee2e6;
+    --text: #1c1e21;
+    --radius: 12px;
+}
+
+*{margin:0;padding:0;box-sizing:border-box}
+
+body {
+    background:var(--bg-gray);
+    font-family:system-ui,-apple-system,sans-serif;
+    color:var(--text);
+}
+
+.login-screen {
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    width:100%;
+    min-height:100%;
+}
+.login-box {
+    background:#fff;padding:40px;border-radius:16px;
+    box-shadow:0 10px 30px rgba(0,0,0,0.08);
+    text-align:center;
+    width:90%;
+    max-width:400px;
+}
+h2 { 
+    margin-bottom:24px;
+    font-size:24px;
+    font-weight:600 
+}
+input, .btn {
+    font-family:inherit;
+    padding:12px 16px;
+    margin:8px 0;
+    border-radius:var(--radius);
+    border:1px solid var(--border);
+    outline:none;
+    font-size:16px;
+}
+input[type="text"], input[type="password"] {
+    width:100%;
+    background:#fff;
+    color:var(--text);
+    transition:border-color 0.2s;
+}
+input:focus { 
+    border-color:var(--primary);
+    box-shadow:0 0 0 2px rgba(0,122,204,0.1) 
+}
+.btn {
+    cursor:pointer;
+    font-weight:600;
+    transition:all 0.2s;
+    text-align:center;
+    border:none;
+}
+.btn-primary { 
+    background:var(--primary);
+    color:#fff;
+    width:100%; 
+}
+.btn-primary:hover { 
+  opacity:0.9; 
+}
+.btn-success { 
+    background:var(--success);
+    color:#fff; 
+}
+.btn-success:hover { 
+    opacity:0.9; 
+}
+.btn-secondary { 
+    background:var(--secondary);
+    color:var(--secondary-text); 
+}
+.btn-secondary:hover { 
+    background:#dde1e3; 
+}
+

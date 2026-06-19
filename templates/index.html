@@ -1,52 +1,23 @@
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=yes">
-<title>PyPAM - Editor de Python Online do Prof. Alan Moraes</title>
+{% extends "base.html" %}
+{% from "macros.html" import login_form %}
+
+{% block head %}
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.css">
 <style>
-:root {
-    --primary: #007acc;
-    --success: #28a745;
-    --danger: #d73a49;
-    --secondary: #e9ecef;
-    --secondary-text: #495057;
-    --bg-gray: #f8f9fa;
-    --border: #dee2e6;
-    --text: #1c1e21;
-    --radius: 12px;
+body{
+    height:100vh;
+    overflow:hidden;
 }
-*{margin:0;padding:0;box-sizing:border-box}
-body{height:100vh;overflow:hidden;background:var(--bg-gray);font-family:system-ui,-apple-system,sans-serif;color:var(--text)}
+
 .view-container {
     position:absolute;top:0;left:0;right:0;bottom:0;
     display:none;flex-direction:column;
 }
-.login-screen {
-    display:flex;align-items:center;justify-content:center;height:100%;
+
+#login-view .login-screen {
+    min-height: 100vh;
 }
-.login-box {
-    background:#fff;padding:40px;border-radius:16px;
-    box-shadow:0 10px 30px rgba(0,0,0,0.08);text-align:center;width:90%;max-width:400px;
-}
-h2 { margin-bottom:24px;font-size:24px;font-weight:600 }
-input, .btn {
-    font-family:inherit;padding:12px 16px;margin:8px 0;border-radius:var(--radius);border:1px solid var(--border);outline:none;font-size:16px;
-}
-input[type="text"], input[type="password"] {
-    width:100%;background:#fff;color:var(--text);transition:border-color 0.2s;
-}
-input:focus { border-color:var(--primary);box-shadow:0 0 0 2px rgba(0,122,204,0.1) }
-.btn {
-    cursor:pointer;font-weight:600;transition:all 0.2s;text-align:center;border:none;
-}
-.btn-primary { background:var(--primary);color:#fff;width:100%; }
-.btn-primary:hover { opacity:0.9; }
-.btn-success { background:var(--success);color:#fff; }
-.btn-success:hover { opacity:0.9; }
-.btn-secondary { background:var(--secondary);color:var(--secondary-text); }
-.btn-secondary:hover { background:#dde1e3; }
+
 .app-header { display:flex;justify-content:space-between;align-items:center;padding:10px 15px;background:var(--secondary);border-bottom:1px solid var(--border) }
 .logout-btn { background:none;border:none;color:var(--secondary-text);cursor:pointer;font-size:18px;padding:4px;display:flex;align-items:center }
 .CodeMirror { height:100%;font-family:"Fira Code",monospace;font-size:14px;line-height:1.6;background:#fff; }
@@ -66,23 +37,11 @@ input:focus { border-color:var(--primary);box-shadow:0 0 0 2px rgba(0,122,204,0.
 .cursor { display:inline-block;width:8px;height:1.2em;background:#333;vertical-align:middle;animation:b 1s step-end infinite }
 @keyframes b { 50% { opacity:0 } }
 </style>
-</head>
-<body>
+{% endblock %}
 
+{% block content %}
 <div id="login-view" class="view-container">
-    <div class="login-screen">
-        <div class="login-box">
-            <h2>Acesso do Estudante</h2>
-            <input type="text" id="username" name="username" placeholder="Usuário"
-                   autocomplete="username" autocapitalize="none" autocorrect="off"
-                   onkeydown="if(event.key==='Enter') doLogin()"/>
-            <input type="password" id="password" name="password" placeholder="Senha"
-                   autocomplete="current-password"
-                   onkeydown="if(event.key==='Enter') doLogin()"/>
-            <button class="btn btn-primary" onclick="doLogin()">ENTRAR</button>
-            <div id="error-msg" style="color:var(--danger);font-size:14px;margin-top:12px;height:1.4em;"></div>
-        </div>
-    </div>
+    {{ login_form("Acesso do Estudante", "doLogin") }}
 </div>
 
 <div id="editor-view" class="view-container">
@@ -291,5 +250,4 @@ function removeCursor() { var c = document.getElementById("cur"); if (c) c.remov
 
 initApp();
 </script>
-</body>
-</html>
+{% endblock %}
