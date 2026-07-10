@@ -10,6 +10,7 @@
     --radius: 12px;
 }
 * { margin:0;padding:0;box-sizing:border-box }
+
 body {
     background:var(--bg-gray);
     font-family:system-ui,-apple-system,sans-serif;
@@ -83,7 +84,7 @@ input:focus {
     background:#dde1e3;
 }
 
-/* ===== index.html (editor do estudante) ===== */
+/* Estilo do index*/
 body:has(#editor-view) {
     height:100vh;
     overflow:hidden;
@@ -117,7 +118,7 @@ body:has(#editor-view) {
 .cursor { display:inline-block;width:8px;height:1.2em;background:#333;vertical-align:middle;animation:b 1s step-end infinite }
 @keyframes b { 50% { opacity:0 } }
 
-/* ===== admin.html (painel do professor) ===== */
+/* estilo do admin */
 body:has(#admin-login) {
     overflow-y:auto;
 }
