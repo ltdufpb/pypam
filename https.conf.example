@@ -1,0 +1,10 @@
+# PyPAM HTTPS configuration.
+# Copy to https.conf and edit: cp https.conf.example https.conf
+# https.conf is git-ignored, so the real domain never ends up in the repository.
+
+# Public domain name pointing to this server (used for the Let's Encrypt certificate
+# and nginx server_name).
+DOMAIN=example.com
+
+# E-mail for the Let's Encrypt (ACME) account registration.
+EMAIL=you@example.com
