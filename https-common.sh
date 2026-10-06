@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2034  # variables are used by the scripts that source this file
 # Shared helpers for the PyPAM HTTPS scripts. Source it, don't run it.
 #
 # Configuration priority: command-line argument > environment variable > https.conf
@@ -6,7 +7,6 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HTTPS_CONF="${HTTPS_CONF:-$SCRIPT_DIR/https.conf}"
 
-# shellcheck disable=SC2034  # used by the scripts that source this file
 # Certbot lineage name: certificate files live in /etc/letsencrypt/live/$CERT_NAME/
 CERT_NAME="pypam"
 WEBROOT="/var/www/certbot"

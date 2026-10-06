@@ -1,66 +1,54 @@
 #!/bin/bash
-# Setup script for PyPAM HTTPS with nginx and Let's Encrypt
-# Run this on the Oracle Cloud instance as root (or with sudo)
+# Setup script for PyPAM HTTPS with nginx and Let's Encrypt.
+# Run this on the server as root (or with sudo), after creating https.conf:
+#   cp https.conf.example https.conf   # then set DOMAIN and EMAIL
+#   sudo ./setup-https.sh [your-email@example.com]
+# Safe to re-run: it also migrates older installations to the current setup.
 
 set -euo pipefail
 
-DOMAIN="a88aec8c.sslip.io"
-EMAIL="${1:-}"
+. "$(dirname "$0")/https-common.sh"
 
-if [ -z "$EMAIL" ]; then
-    echo "Usage: sudo ./setup-https.sh your-email@example.com"
-    echo "  The email is required by Let's Encrypt for certificate expiry notices."
-    exit 1
-fi
+require_root
+load_config
+EMAIL="${1:-$EMAIL}"
+require_domain
+require_email
+export DOMAIN EMAIL
 
 echo "==> Installing nginx and certbot..."
 apt-get update
-apt-get install -y nginx certbot python3-certbot-nginx
+apt-get install -y nginx certbot
 
-echo "==> Stopping nginx temporarily..."
-systemctl stop nginx || true
+echo "==> Writing nginx server_name for $DOMAIN..."
+write_server_name_snippet
 
-echo "==> Creating ACME challenge directory..."
-mkdir -p /var/www/certbot
-
-echo "==> Obtaining SSL certificate from Let's Encrypt..."
-certbot certonly --standalone \
-    -d "$DOMAIN" \
-    --non-interactive \
-    --agree-tos \
-    --email "$EMAIL"
+"$SCRIPT_DIR/issue-cert.sh" "$EMAIL"
 
 echo "==> Installing nginx configuration..."
-cp nginx/pypam.conf /etc/nginx/sites-available/pypam
+cp "$SCRIPT_DIR/nginx/pypam.conf" /etc/nginx/sites-available/pypam
 ln -sf /etc/nginx/sites-available/pypam /etc/nginx/sites-enabled/pypam
-rm -f /etc/nginx/sites-enabled/default
 
 echo "==> Testing nginx configuration..."
 nginx -t
 
 echo "==> Starting nginx..."
 systemctl enable nginx
-systemctl start nginx
+if systemctl is-active --quiet nginx; then
+    systemctl reload nginx
+else
+    systemctl start nginx
+fi
 
-echo "==> Setting up automatic certificate renewal..."
-# Certbot installs a systemd timer by default, but let's make sure
-systemctl enable certbot.timer
-systemctl start certbot.timer
-
-# Reload nginx after each renewal so it picks up the new certificate
-mkdir -p /etc/letsencrypt/renewal-hooks/deploy
-cat > /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh << 'HOOK'
-#!/bin/bash
-systemctl reload nginx
-HOOK
-chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh
+"$SCRIPT_DIR/setup-cert-renewal.sh"
 
 echo "==> Restarting PyPAM service..."
 systemctl restart pypam
 
 echo ""
+echo "==> Checking the certificate in use..."
+"$SCRIPT_DIR/check-cert.sh"
+
+echo ""
 echo "Done! PyPAM is now available at:"
 echo "  https://$DOMAIN"
-echo ""
-echo "Certificates will auto-renew via certbot.timer."
-echo "To check renewal: sudo certbot renew --dry-run"
