@@ -14,7 +14,7 @@ Key Technologies:
 - Backend: FastAPI (Python 3.10+) utilizing ASGI for asynchronous I/O.
 - Execution: Docker Engine via the Docker SDK for Python.
 - Communication: WebSockets (PEP 3156) for low-latency terminal emulation.
-- Frontend: Vanilla JavaScript SPA with CodeMirror 5 for IDE-like features.
+- Frontend: Vanilla JavaScript SPA with CodeMirror 6 for IDE-like features.
 
 Execution Lifecycle:
 1. Student writes code in the CodeMirror editor (Frontend).
@@ -70,6 +70,7 @@ Layer 5: Process Privilege
   The terminal uses a hidden 'input' element to proxy focus and keystrokes.
 """
 
+import json
 import os
 import ast
 import asyncio
@@ -882,19 +883,6 @@ input:focus { border-color:var(--primary);box-shadow:0 0 0 2px rgba(0,122,204,0.
 .app-header { display:flex;justify-content:space-between;align-items:center;padding:10px 15px;background:var(--secondary);border-bottom:1px solid var(--border) }
 .user-label { color:var(--secondary-text);font-weight:600;font-size:14px }
 .logout-btn { background:none;border:none;color:var(--secondary-text);cursor:pointer;font-size:18px;padding:4px;display:flex;align-items:center }
-
-/* CodeMirror Integration styles */
-.CodeMirror { height: 100%; font-family: "Fira Code", monospace; font-size: 14px; line-height: 1.6; background: #fff; }
-.CodeMirror-gutters { background: #f8f9fa; border-right: 1px solid #e5e7eb; }
-.CodeMirror-linenumber { color: #adb5bd; padding: 0 8px; }
-.cm-s-default .cm-keyword { color: #0000ff; font-weight: bold; }
-.cm-s-default .cm-string { color: #a31515; }
-.cm-s-default .cm-comment { color: #008000; font-style: italic; }
-.cm-s-default .cm-variable-2 { color: #001080; }
-.cm-s-default .cm-def { color: #795e26; }
-.cm-s-default .cm-builtin { color: #0000ff; }
-.cm-s-default .cm-number { color: #098658; }
-.cm-s-default .cm-operator { color: #333; }
 """
 
 # HTML snippet for the standardized login card
@@ -926,13 +914,47 @@ HEADER_TEMPLATE = """
 """
 
 # --- MAIN STUDENT UI ---
+
+# CodeMirror 6 is loaded as ES modules from esm.sh. The "*" prefix leaves each module's own
+# imports unresolved, and the import map pins every package to a single URL, so the browser
+# loads exactly one copy of each (CodeMirror rejects two copies of @codemirror/state).
+# The list is the full npm dependency tree of the packages imported by the editor.
+CM_PACKAGES = {
+    "@codemirror/autocomplete": "6.20.3",
+    "@codemirror/commands": "6.11.1",
+    "@codemirror/lang-python": "6.2.1",
+    "@codemirror/language": "6.12.4",
+    "@codemirror/state": "6.7.6",
+    "@codemirror/view": "6.43.13",
+    "@lezer/common": "1.5.3",
+    "@lezer/highlight": "1.2.5",
+    "@lezer/lr": "1.4.10",
+    "@lezer/python": "1.1.19",
+    "@marijn/find-cluster-break": "1.0.4",
+    "crelt": "1.0.7",
+    "style-mod": "4.1.4",
+    "w3c-keyname": "2.2.8",
+}
+CM_IMPORT_MAP = json.dumps(
+    {
+        "imports": {
+            name: f"https://esm.sh/*{name}@{version}"
+            for name, version in CM_PACKAGES.items()
+        }
+    },
+    indent=4,
+)
+
+
 HTML = f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=yes">
 <title>PyPAM - Editor de Python Online do Prof. Alan Moraes</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.css">
+<script type="importmap">
+{CM_IMPORT_MAP}
+</script>
 <style>
 {SHARED_CSS}
 #editor-container {{ flex:1; overflow:hidden; background:#fff; position:relative; }}
@@ -948,9 +970,7 @@ HTML = f"""<!DOCTYPE html>
 </div>
 <div id="editor-view" class="view-container">
     {HEADER_TEMPLATE}
-    <div id="editor-container">
-        <textarea id="code-editor"></textarea>
-    </div>
+    <div id="editor-container"></div>
     <button id="run" class="btn btn-success" onclick="start()">▶ EXECUTAR</button>
 </div>
 <div id="terminal-view" class="view-container">
@@ -961,26 +981,8 @@ HTML = f"""<!DOCTYPE html>
     <button id="back" class="btn btn-secondary" onclick="back()">← Voltar</button>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/python/python.min.js"></script>
 <script>
 var ws, term=document.getElementById("terminal"), termInput=document.getElementById("term-input"), editor;
-
-// Initialize CodeMirror with Python mode and mobile-aware input style
-editor = CodeMirror.fromTextArea(document.getElementById("code-editor"), {{
-    mode: "python",
-    lineNumbers: true,
-    indentUnit: 4,
-    smartIndent: true,
-    tabSize: 4,
-    indentWithTabs: false,
-    inputStyle: "textarea",
-    extraKeys: {{"Tab": function(cm) {{ cm.replaceSelection("    ", "end"); }} }},
-    viewportMargin: Infinity,
-    autocapitalize: false,
-    spellcheck: false,
-    autocorrect: false
-}});
 
 function showView(id) {{
     document.querySelectorAll(".view-container").forEach(d => d.style.display = "none");
@@ -989,8 +991,8 @@ function showView(id) {{
     var u = localStorage.getItem("pypam_u");
     // Update all username labels in headers
     if(u) {{ target.querySelectorAll(".user-display").forEach(el => el.innerText = u); }}
-    // CodeMirror needs a refresh if it was initialized while hidden
-    if(id === "editor-view") setTimeout(() => editor.refresh(), 10);
+    // The editor measures its size again after being hidden (it may not be created yet)
+    if(id === "editor-view" && editor) setTimeout(() => editor.requestMeasure(), 10);
     // Focus terminal proxy on mobile
     if(id === "terminal-view") setTimeout(() => termInput.focus(), 50);
 }}
@@ -1047,7 +1049,7 @@ async function doLogout() {{
 
 function clearEditor() {{
     if(confirm("Deseja realmente limpar todo o código?")) {{
-        editor.setValue("");
+        editor.dispatch({{changes: {{from: 0, to: editor.state.doc.length, insert: ""}}}});
     }}
 }}
 
@@ -1068,7 +1070,7 @@ async function initApp() {{
 }}
 
 function start(){{
-    var code = editor.getValue();
+    var code = editor.state.doc.toString();
     showView("terminal-view");
     term.innerHTML=""; term.focus();
     
@@ -1143,6 +1145,57 @@ function removeCursor(){{
 }}
 
 initApp();
+</script>
+<script type="module">
+import {{EditorView, keymap, lineNumbers, drawSelection}} from "@codemirror/view";
+import {{EditorState}} from "@codemirror/state";
+import {{indentUnit, indentOnInput, bracketMatching, syntaxHighlighting, HighlightStyle}} from "@codemirror/language";
+import {{defaultKeymap, history, historyKeymap}} from "@codemirror/commands";
+import {{python}} from "@codemirror/lang-python";
+import {{tags}} from "@lezer/highlight";
+
+// Python colours (VS Code Light)
+const highlight = HighlightStyle.define([
+    {{tag: tags.keyword, color: "#0000ff", fontWeight: "bold"}},
+    {{tag: [tags.bool, tags.null, tags.self], color: "#0000ff"}},
+    {{tag: tags.string, color: "#a31515"}},
+    {{tag: tags.comment, color: "#008000", fontStyle: "italic"}},
+    {{tag: tags.number, color: "#098658"}},
+    {{tag: [tags.function(tags.definition(tags.variableName)), tags.definition(tags.className)], color: "#795e26"}},
+    {{tag: tags.operator, color: "#333"}}
+]);
+
+const theme = EditorView.theme({{
+    "&": {{height: "100%", fontSize: "14px", backgroundColor: "#fff"}},
+    "&.cm-focused": {{outline: "none"}},
+    ".cm-scroller": {{fontFamily: '"Fira Code", monospace', lineHeight: "1.6"}},
+    ".cm-gutters": {{backgroundColor: "#f8f9fa", borderRight: "1px solid #e5e7eb", color: "#adb5bd"}},
+    ".cm-lineNumbers .cm-gutterElement": {{padding: "0 8px"}}
+}});
+
+// Tab inserts four spaces at the cursor
+function insertTab(view) {{
+    view.dispatch(view.state.replaceSelection("    "), {{scrollIntoView: true, userEvent: "input"}});
+    return true;
+}}
+
+editor = new EditorView({{
+    parent: document.getElementById("editor-container"),
+    extensions: [
+        lineNumbers(),
+        history(),
+        drawSelection(),
+        indentOnInput(),
+        bracketMatching(),
+        python(),
+        indentUnit.of("    "),
+        EditorState.tabSize.of(4),
+        keymap.of([{{key: "Tab", run: insertTab}}, ...defaultKeymap, ...historyKeymap]),
+        syntaxHighlighting(highlight),
+        theme,
+        EditorView.contentAttributes.of({{autocapitalize: "off", autocorrect: "off", spellcheck: "false"}})
+    ]
+}});
 </script>
 </body>
 </html>"""
