@@ -81,6 +81,7 @@ from docker.types import Mount
 import tempfile
 import shutil
 import secrets
+import hashlib
 from fastapi import FastAPI, WebSocket, Request, Depends
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -88,6 +89,7 @@ from contextlib import asynccontextmanager
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from cachetools import TTLCache
 
 # --- SECURITY CONTEXT ---
@@ -367,6 +369,8 @@ app.add_middleware(
     same_site="lax",
     https_only=HTTPS_ENABLED,
 )
+# Compress responses (the editor bundle drops from ~370 KB to ~125 KB)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 # --- GLOBAL ERROR HANDLING ---
@@ -915,6 +919,13 @@ HEADER_TEMPLATE = """
 
 # --- MAIN STUDENT UI ---
 
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+
+# Fingerprint of the editor bundle, added to its URL: browsers cache the file for a year and
+# fetch it again only when a rebuild changes the fingerprint
+with open(os.path.join(STATIC_DIR, "codemirror.js"), "rb") as f:
+    CM_BUNDLE_VERSION = hashlib.sha256(f.read()).hexdigest()[:12]
+
 HTML = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -1132,7 +1143,7 @@ function removeCursor(){{
 
 initApp();
 </script>
-<script src="/static/codemirror.js"></script>
+<script src="/static/codemirror.js?v={CM_BUNDLE_VERSION}"></script>
 <script>
 // Python built-ins coloured like keywords, as in the previous editor
 const BUILTINS = new Set(("abs all any ascii bin bool breakpoint bytearray bytes callable chr classmethod compile " +
@@ -1356,14 +1367,17 @@ document.getElementById("admin-login").style.display = "flex";
 </html>"""
 
 
+class CachedStaticFiles(StaticFiles):
+    """Static files that browsers may keep for a year; pages link them with ?v=<fingerprint>."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+
 # CodeMirror 6 bundle used by the student editor (built by build-codemirror.sh)
-app.mount(
-    "/static",
-    StaticFiles(
-        directory=os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
-    ),
-    name="static",
-)
+app.mount("/static", CachedStaticFiles(directory=STATIC_DIR), name="static")
 
 
 @app.get("/", response_class=HTMLResponse)
