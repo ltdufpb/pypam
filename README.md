@@ -53,101 +53,63 @@ sudo systemctl start pypam
 ```
 
 ### 5. Enable HTTPS (Recommended)
-PyPAM uses **nginx** as a reverse proxy for SSL termination with free **Let's Encrypt** certificates.
+PyPAM uses **nginx** with a free **Let's Encrypt** certificate.
 
-> **Before you start:** the domain must point to the server, and ports **80** and **443** must be open. Port 80 must **stay** open: Let's Encrypt uses it to validate every renewal.
->
-> On **Oracle Cloud**, allow them in the subnet's Security List (or the instance's Network Security Group). Then check the instance's own firewall with `sudo iptables -S INPUT`. Some Oracle images ship rules in `/etc/iptables/rules.v4` that reject all incoming traffic except SSH; if the output contains a `REJECT` rule, allow the two ports now:
-> ```bash
-> sudo iptables -I INPUT -p tcp -m multiport --dports 80,443 -j ACCEPT
-> ```
-> To keep the rule after a reboot, add the line `-A INPUT -p tcp -m multiport --dports 80,443 -j ACCEPT` to `/etc/iptables/rules.v4`, **above** the `REJECT` line. Don't use `netfilter-persistent save`: it would also save Docker's own rules into the file.
+#### Before you start
+- Point your domain to the server.
+- Open ports **80** and **443**, and keep port 80 open: certificate renewals use it.
+- On **Oracle Cloud**, allow both ports in the subnet's Security List. Then run `sudo iptables -S INPUT` on the server. If the output has a `REJECT` rule, open the ports:
+  ```bash
+  sudo iptables -I INPUT -p tcp -m multiport --dports 80,443 -j ACCEPT
+  ```
+  To keep this after a reboot, add `-A INPUT -p tcp -m multiport --dports 80,443 -j ACCEPT` to `/etc/iptables/rules.v4`, above the `REJECT` line.
 
-#### Configure the domain
-The domain is never committed to the repository. It lives in `cert.conf`, which is git-ignored:
+#### Configure
+Copy `cert.conf.example` to `cert.conf`, and edit `cert.conf` to set `DOMAIN` and `EMAIL`:
 ```bash
 cp cert.conf.example cert.conf
-nano cert.conf   # set DOMAIN=example.com and EMAIL=you@example.com
+nano cert.conf
 ```
-`DOMAIN` and `EMAIL` are read only from `cert.conf`; they can't be given as command-line options or environment variables. Every `cert.sh` command except `help` stops right away if `cert.conf` is missing or doesn't set `DOMAIN` and `EMAIL`.
 
-#### Run the setup
+#### Install
 ```bash
 sudo ./cert.sh install
-```
-
-This will:
-- Install nginx and certbot, if missing
-- Obtain the certificate with certbot's **webroot** method
-- Install `nginx/pypam.conf`, which proxies HTTP (port 80) → HTTPS (port 443) → PyPAM (port 8000)
-- Set up automatic certificate renewal
-- Restart PyPAM and verify the certificate being served
-
-After running the script, reload the systemd service to enable secure session cookies:
-```bash
 sudo systemctl daemon-reload
 sudo systemctl restart pypam
 ```
+This installs nginx and certbot, gets the certificate, configures nginx and automatic renewal, and checks the result.
 
-`install` refuses to run again once the certificate exists. To reinstall, or after changing `cert.conf` (for example, a new domain), run `sudo ./cert.sh install --force`: it overwrites the nginx and renewal setup and requests a new certificate.
+To reinstall, or after changing `cert.conf`, run `sudo ./cert.sh install --force`.
 
-#### `cert.sh` commands
+#### Commands
 | Command | What it does |
 | :--- | :--- |
-| `sudo ./cert.sh install [-f]` | Sets up HTTPS as described above. The certificate is stored in `/etc/letsencrypt/live/pypam/`, whatever the domain is. Before the first certificate exists, the temporary site `nginx/acme-bootstrap.conf` answers Let's Encrypt's validation. Also removes obsolete certificates from older setups. |
-| `sudo ./cert.sh renew [-f] [-n]` | Renews the certificate now if it is due (`-f`/`--force`: renew anyway; `-n`/`--dry-run`: test only). |
-| `./cert.sh check [-m DAYS] [-p PORT]` | Checks the certificate actually served on port 443 (see below). |
-| `./cert.sh help [COMMAND]` | Shows all commands, or every option of one command. `-h`/`--help` also works after a command. |
+| `sudo ./cert.sh install` | Sets up HTTPS. Add `--force` to reinstall. |
+| `sudo ./cert.sh renew` | Renews the certificate if it expires in less than 30 days. Add `--force` to renew anyway, or `--dry-run` to only test. |
+| `sudo ./cert.sh check` | Checks the certificate the server is using. Add `--min-days 30` to fail if it expires in less than 30 days (default: 14). |
+| `./cert.sh help` | Shows all commands. `./cert.sh help <command>` shows the options of one command. |
 
-Every option has a short and a long form (`-f`/`--force`, `-c`/`--config`, ...); see `./cert.sh help <command>`.
-
-nginx gets the domain only from the generated file `/etc/nginx/snippets/pypam-server-name.conf` (`server_name <DOMAIN>;`). `nginx/pypam.conf` itself contains no domain, and the site is matched by name, so other sites on the same nginx are not affected.
-
-#### Automatic certificate renewal
-Let's Encrypt certificates are valid for 90 days. Renewal works like this:
-1. The `certbot.timer` systemd timer runs `certbot renew` twice a day. If certbot came from snap, `snap.certbot.renew.timer` does this instead; if no timer exists, the cron job `/etc/cron.d/certbot-pypam` is installed.
-2. certbot renews the certificate once it has fewer than 30 days left, using the webroot method saved in `/etc/letsencrypt/renewal/pypam.conf`. nginx does **not** need to be stopped.
-3. The deploy hook `/etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh` reloads nginx, so it serves the new certificate.
-
-To confirm renewal is set up and works:
+#### Renewal
+Renewal is automatic: certbot checks twice a day and renews the certificate when it has less than 30 days left. To check that it works:
 ```bash
-systemctl list-timers 'certbot*'       # next scheduled run
-sudo ./cert.sh renew --dry-run         # full renewal test against the staging server
-sudo certbot certificates              # certificates and expiry dates
-sudo journalctl -u certbot --since "7 days ago"   # renewal logs
+sudo ./cert.sh check            # certificate in use, expiry date and renewal schedule
+sudo ./cert.sh renew --dry-run  # tests a renewal
 ```
-To renew by hand, run `sudo ./cert.sh renew` (only if due) or `sudo ./cert.sh renew --force`.
 
-> **Why the certificate used to expire:** older versions of the setup script obtained it with certbot's `standalone` method. certbot reuses that method on every renewal, and it needs port 80 free. Since nginx is always on port 80, every automatic renewal failed silently.
-
-#### Verifying the certificate
-`./cert.sh check` connects to the server like a browser would and checks the certificate it is actually served. Run it on the server, where `cert.conf` is; it does not need root, but some checks only run as root (see below):
-```bash
-./cert.sh check         # uses DOMAIN from cert.conf
-./cert.sh check -m 30   # fail if less than 30 days left
+Let's Encrypt no longer sends expiry e-mails. To be warned in the system log, add a weekly check in `/etc/cron.d/pypam-check-cert`:
 ```
-It prints the subject, issuer and validity dates, followed by `OK`/`FAIL` lines for these checks:
-- the chain is trusted and matches the hostname;
-- the certificate is not expired and expires in more than `--min-days` days (default 14);
-- **only when run as root on the server:** nginx serves the same certificate as `/etc/letsencrypt/live/pypam/` (i.e. it was reloaded after renewal), and a renewal timer or cron job exists.
-
-The exit status is `0` when everything is OK, `1` if any check fails and `2` on a usage error. Let's Encrypt no longer e-mails expiry warnings, so you may want a weekly check whose failures show up in the system logs:
-```bash
-# /etc/cron.d/pypam-check-cert
 0 8 * * 1 root /home/ubuntu/pypam/cert.sh check > /dev/null || logger -t pypam "TLS certificate check FAILED"
 ```
 
-Without the script, you can also check the dates with `echo | openssl s_client -connect example.com:443 -servername example.com 2>/dev/null | openssl x509 -noout -dates`.
-
-#### Migrating an existing server
-Servers set up with an older version of the HTTPS setup (`setup-https.sh`) use the `standalone` method, so their certificate will not renew. To migrate (once):
+#### Migrating from `setup-https.sh`
+On servers set up with the old `setup-https.sh`, the certificate does not renew. Fix it once:
 ```bash
 cd pypam
 git pull
-cp cert.conf.example cert.conf   # set DOMAIN to the server's current domain, and EMAIL
+cp cert.conf.example cert.conf   # then set DOMAIN (the current domain) and EMAIL
 sudo ./cert.sh install
 ```
-This issues a new certificate with the webroot method (stored as `pypam`), switches nginx to the new configuration, removes the old certificate and checks the result. Afterwards, `sudo certbot certificates` should list only `pypam`.
+Afterwards, `sudo certbot certificates` should list a single certificate, named `pypam`.
 
 ---
 
@@ -163,7 +125,7 @@ pip install -r requirements.txt
 sudo systemctl restart pypam
 ```
 
-> **Servers set up before the certificate scripts were added:** these steps don't fix certificate renewal, so the certificate will still expire. After pulling, do the one-time [migration](#migrating-an-existing-server).
+If the server was set up with the old `setup-https.sh`, also [migrate it to `cert.sh`](#migrating-from-setup-httpssh) once.
 
 ---
 
