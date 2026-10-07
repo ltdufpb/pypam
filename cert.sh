@@ -42,7 +42,7 @@ usage_error() {
     exit 2
 }
 
-# Reads the config file; stops if it is missing or does not set DOMAIN.
+# Reads the config file; stops if it is missing or does not set DOMAIN and EMAIL.
 load_config() {
     [ -f "$CONFIG_FILE" ] \
         || die "config file not found: $CONFIG_FILE. Run 'cp cert.conf.example cert.conf' and set DOMAIN and EMAIL."
@@ -52,6 +52,7 @@ load_config() {
     # shellcheck source=cert.conf.example
     . "$CONFIG_FILE"
     require_domain
+    require_email
 }
 
 require_root() {
@@ -66,7 +67,7 @@ require_domain() {
 
 require_email() {
     if [ -z "${EMAIL:-}" ] || [ "$EMAIL" = "you@example.com" ]; then
-        die "EMAIL is not set in $CONFIG_FILE. Set EMAIL there."
+        die "EMAIL is not set in $CONFIG_FILE."
     fi
 }
 
@@ -248,7 +249,6 @@ cmd_install() {
     [ $# -eq 0 ] || usage_error install "unexpected argument: $1"
 
     load_config
-    require_email
     require_root
 
     if is_installed && [ -z "$force" ]; then
@@ -268,7 +268,7 @@ cmd_install() {
     if [ -z "$no_check" ]; then
         echo ""
         echo "==> Checking the certificate in use..."
-        cmd_check --domain "$DOMAIN"
+        cmd_check
     fi
 
     echo ""
@@ -314,13 +314,12 @@ cmd_renew() {
 # hostname, not expiring soon. As root on the server, also checks that nginx serves the
 # certificate on disk and that renewal is scheduled. Returns 1 if any check fails.
 cmd_check() {
-    local opts opt_domain="" min_days=14 port=443
-    opts="$(getopt -n "$PROG check" -o d:m:p:c:h -l domain:,min-days:,port:,config:,help -- "$@")" \
+    local opts min_days=14 port=443
+    opts="$(getopt -n "$PROG check" -o m:p:c:h -l min-days:,port:,config:,help -- "$@")" \
         || usage_error check
     eval set -- "$opts"
     while true; do
         case "$1" in
-            -d | --domain) opt_domain="$2"; shift 2 ;;
             -m | --min-days) min_days="$2"; shift 2 ;;
             -p | --port) port="$2"; shift 2 ;;
             -c | --config) CONFIG_FILE="$2"; shift 2 ;;
@@ -335,7 +334,7 @@ cmd_check() {
     fi
 
     load_config
-    local domain="${opt_domain:-$DOMAIN}"
+    local domain="$DOMAIN"
     command -v openssl > /dev/null || die "openssl is not installed."
 
     local failed=0
@@ -421,12 +420,12 @@ Commands:
   install   Install nginx and certbot, obtain the certificate, configure nginx and
             automatic renewal (run once; --force to reinstall). Requires root.
   renew     Renew the certificate now if it is due (--force: renew anyway). Requires root.
-  check     Check the certificate served on the HTTPS port. Works on any machine.
+  check     Check the certificate this server serves on the HTTPS port.
   help      Show this help, or the help of a command: $PROG help <command>
 
 The domain and e-mail are read only from cert.conf next to this script
 (cp cert.conf.example cert.conf), or from the file given with --config.
-Every command except help stops if that file is missing or does not set DOMAIN.
+Every command except help stops if that file is missing or does not set DOMAIN and EMAIL.
 
 Run '$PROG help <command>' or '$PROG <command> --help' for the options of a command.
 EOF
@@ -482,7 +481,8 @@ EOF
             cat << EOF
 Usage: $PROG check [options]
 
-Connects to the HTTPS port like a browser and checks the certificate actually served:
+Run on the server where '$PROG install' was (or will be) run. Connects to DOMAIN from
+the configuration file like a browser and checks the certificate actually served:
 the chain is trusted and matches the domain, and it is valid for more than --min-days days.
 When run as root on the server, also checks that nginx serves the certificate on disk
 (it was reloaded after the last renewal) and that automatic renewal is scheduled.
@@ -490,7 +490,6 @@ When run as root on the server, also checks that nginx serves the certificate on
 Exit status: 0 if every check passes, 1 if any fails, 2 on a usage error.
 
 Options:
-  -d, --domain DOMAIN   domain to check (default: DOMAIN in cert.conf)
   -m, --min-days DAYS   fail if the certificate expires in fewer days (default: 14)
   -p, --port PORT       HTTPS port (default: 443)
   -c, --config FILE     configuration file (default: cert.conf next to this script)
@@ -498,7 +497,7 @@ Options:
 
 Examples:
   $PROG check
-  $PROG check -d example.com -m 30
+  $PROG check -m 30
 EOF
             ;;
         help)
