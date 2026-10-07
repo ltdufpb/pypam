@@ -1000,22 +1000,41 @@ function showView(id) {{
 // Clicking the terminal area focuses the hidden input to show the keyboard
 term.onclick = () => termInput.focus();
 
-// Terminal Input Logic: Maps standard keyboard events to TTY control characters
+// Terminal input: the hidden input holds the line typed since the last Enter. Mobile keyboards
+// rewrite whole words while typing (predictive text, autocorrect) and may not report Backspace
+// as a key, so instead of forwarding events, each change sends the difference from what was
+// already sent: one DEL (\\x7f) per removed character, then the new characters.
+var sentLine = [];
+
+function resetTermInput() {{
+    termInput.value = "";
+    sentLine = [];
+}}
+
+function syncTermInput() {{
+    if(!ws || ws.readyState!==1) return;
+    var line = Array.from(termInput.value);
+    var same = 0;
+    while(same < sentLine.length && same < line.length && sentLine[same] === line[same]) same++;
+    var data = "\\x7f".repeat(sentLine.length - same) + line.slice(same).join("");
+    if(data) ws.send(JSON.stringify({{t:"in", d:data}}));
+    sentLine = line;
+}}
+
+termInput.oninput = syncTermInput;
+
 termInput.onkeydown = (e) => {{
     if(!ws || ws.readyState!==1) return;
-    if(e.key === "Enter") ws.send(JSON.stringify({{t:"in",d:"\\n"}}));
-    else if(e.key === "Backspace") ws.send(JSON.stringify({{t:"in",d:"\\x7f"}}));
-    else if(e.ctrlKey && e.key === "c") ws.send(JSON.stringify({{t:"in",d:"\\x03"}}));
-}};
-
-// Handles characters sent by mobile predictive text/autocorrect
-termInput.oninput = (e) => {{
-    if(!ws || ws.readyState!==1) return;
-    var val = e.data || termInput.value;
-    if(val) {{
-        ws.send(JSON.stringify({{t:"in", d:val}}));
+    if(e.key === "Enter") {{
+        e.preventDefault();
+        syncTermInput();
+        ws.send(JSON.stringify({{t:"in",d:"\\n"}}));
+        resetTermInput();
     }}
-    termInput.value = "";
+    else if(e.ctrlKey && e.key === "c") {{
+        ws.send(JSON.stringify({{t:"in",d:"\\x03"}}));
+        resetTermInput();
+    }}
 }};
 
 async function doLogin() {{
@@ -1073,6 +1092,7 @@ function start(){{
     var code = editor.state.doc.toString();
     showView("terminal-view");
     term.innerHTML=""; term.focus();
+    resetTermInput();
     
     var proto=location.protocol==="https:"?"wss:":"ws:";
     ws=new WebSocket(proto+"//"+location.host+"/ws");
