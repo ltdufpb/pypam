@@ -167,3 +167,29 @@ def test_websocket_execution_security_readonly_fs():
         output_str = "".join(outputs)
         assert "Write to /etc blocked" in output_str
         assert "Read-only file system" in output_str
+
+
+def test_websocket_input_backspace_erases():
+    # The browser sends one DEL (\x7f) per erased character, e.g. when a mobile keyboard
+    # autocorrects a word; the container's TTY must apply them before input() returns
+    client = TestClient(app)
+    login_res = client.post(
+        "/login", json={"username": "testuser", "password": "testpass"}
+    )
+    assert login_res.json()["success"]
+
+    with client.websocket_connect("/ws") as websocket:
+        websocket.send_json({"code": "print(repr(input()))"})
+        for data in ["ola mudno", "\x7f\x7f\x7f", "ndo.", "\n"]:
+            websocket.send_json({"t": "in", "d": data})
+
+        outputs = []
+        while True:
+            data = websocket.receive_json()
+            if data["t"] == "out":
+                outputs.append(data["d"])
+            elif data["t"] == "end":
+                assert data["c"] == 0
+                break
+
+        assert "'ola mundo.'" in "".join(outputs)
