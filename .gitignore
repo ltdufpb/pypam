@@ -37,3 +37,5 @@ build/
 .installed.cfg
 *.egg
 MANIFEST
+
+students_table.txt

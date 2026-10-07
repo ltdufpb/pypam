@@ -53,28 +53,56 @@ sudo systemctl start pypam
 ```
 
 ### 5. Enable HTTPS (Recommended)
-PyPAM uses **nginx** as a reverse proxy for SSL termination with free **Let's Encrypt** certificates. The setup script handles everything:
+PyPAM uses **nginx** with a free **Let's Encrypt** certificate.
 
+#### Before you start
+- Point your domain to the server.
+- Open ports **80** and **443** in the server's firewall, and keep port 80 open: certificate renewals use it.
+  ```bash
+  sudo ufw allow 80/tcp
+  sudo ufw allow 443/tcp
+  sudo ufw status
+  ```
+- If your provider also has a firewall in its control panel, open the two ports there too.
+
+> **Oracle Cloud (OCI):** ufw is not enough; the ports must also be open in the OCI Console. Go to **Networking → Virtual cloud networks →** your VCN **→ Security Lists →** the subnet's security list (usually *Default Security List*), and click **Add Ingress Rules**. Add a rule with source CIDR `0.0.0.0/0`, IP protocol *TCP* and destination port `80`, and another one for `443`. If the instance uses a Network Security Group, add the rules there instead.
+
+#### Configure
+Copy `cert.conf.example` to `cert.conf`, and edit `cert.conf` to set `DOMAIN` and `EMAIL`:
 ```bash
-sudo ./setup-https.sh your-email@example.com
+cp cert.conf.example cert.conf
+nano cert.conf
 ```
 
-This will:
-- Install nginx and certbot
-- Obtain an SSL certificate for your domain
-- Configure nginx to proxy HTTP (port 80) → HTTPS (port 443) → PyPAM (port 8000)
-- Set up automatic certificate renewal
-
-After running the script, reload the systemd service to enable secure session cookies:
+#### Install
 ```bash
+sudo ./cert.sh install
 sudo systemctl daemon-reload
 sudo systemctl restart pypam
 ```
+This installs nginx and certbot, gets the certificate, configures nginx and automatic renewal, and checks the result.
 
-> **Note:** Before running the script, make sure ports **80** and **443** are open in your cloud provider's security list/firewall rules.
+To reinstall, or after changing `cert.conf`, run `sudo ./cert.sh install --force`.
 
-#### Custom Domain
-By default, the nginx config uses `a88aec8c.sslip.io`. To use a different domain, edit `nginx/pypam.conf` and replace the `server_name` and certificate paths, then re-run the setup script.
+#### Commands
+| Command | What it does |
+| :--- | :--- |
+| `sudo ./cert.sh install` | Sets up HTTPS. Add `--force` to reinstall. |
+| `sudo ./cert.sh renew` | Renews the certificate if it expires in less than 30 days. Add `--force` to renew anyway, or `--dry-run` to only test. |
+| `sudo ./cert.sh check` | Checks the certificate the server is using. Add `--min-days 30` to fail if it expires in less than 30 days (default: 14). |
+| `./cert.sh help` | Shows all commands. `./cert.sh help <command>` shows the options of one command. |
+
+#### Renewal
+Renewal is automatic: certbot checks twice a day and renews the certificate when it has less than 30 days left. To check that it works:
+```bash
+sudo ./cert.sh check            # certificate in use, expiry date and renewal schedule
+sudo ./cert.sh renew --dry-run  # tests a renewal
+```
+
+Let's Encrypt no longer sends expiry e-mails. To be warned in the system log, add a weekly check in `/etc/cron.d/pypam-check-cert`:
+```
+0 8 * * 1 root /home/ubuntu/pypam/cert.sh check > /dev/null || logger -t pypam "TLS certificate check FAILED"
+```
 
 ---
 
@@ -137,8 +165,11 @@ If you just need to add one or two students mid-term (rather than rolling over t
 | **Restart App** | `sudo systemctl restart pypam` |
 | **Stop App** | `sudo systemctl stop pypam` |
 | **View Crash Logs** | `sudo journalctl -u pypam --since "1 hour ago"` |
-| **Check Certificate** | `sudo certbot certificates` |
-| **Test Renewal** | `sudo certbot renew --dry-run` |
+| **Check Certificate** | `sudo ./cert.sh check` |
+| **List Certificates** | `sudo certbot certificates` |
+| **Renewal Timer** | `systemctl list-timers 'certbot*'` |
+| **Test Renewal** | `sudo ./cert.sh renew --dry-run` |
+| **Renew Now** | `sudo ./cert.sh renew --force` |
 
 ---
 

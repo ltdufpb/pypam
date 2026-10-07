@@ -1,0 +1,7 @@
+# PyPAM HTTPS configuration.
+# Public domain name pointing to this server (used for the Let's Encrypt certificate
+# and nginx server_name).
+DOMAIN=example.com
+
+# E-mail for the Let's Encrypt (ACME) account registration.
+EMAIL=you@example.com
