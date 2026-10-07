@@ -63,7 +63,7 @@ The domain is never committed to the repository. It lives in `cert.conf`, which 
 cp cert.conf.example cert.conf
 nano cert.conf   # set DOMAIN=example.com and EMAIL=you@example.com
 ```
-`DOMAIN` and `EMAIL` can also be given as options (`sudo ./cert.sh install -d example.com -e you@example.com`) or as environment variables. Options override environment variables, which override `cert.conf`.
+`DOMAIN` and `EMAIL` are read only from `cert.conf`; they can't be given as command-line options or environment variables.
 
 #### Run the setup
 ```bash
@@ -88,12 +88,12 @@ sudo systemctl restart pypam
 #### `cert.sh` commands
 | Command | What it does |
 | :--- | :--- |
-| `sudo ./cert.sh install [-d DOMAIN] [-e EMAIL] [-f]` | Sets up HTTPS as described above. The certificate is stored in `/etc/letsencrypt/live/pypam/`, whatever the domain is. Before the first certificate exists, the temporary site `nginx/acme-bootstrap.conf` answers Let's Encrypt's validation. Also removes obsolete certificates from older setups. |
+| `sudo ./cert.sh install [-f]` | Sets up HTTPS as described above. The certificate is stored in `/etc/letsencrypt/live/pypam/`, whatever the domain is. Before the first certificate exists, the temporary site `nginx/acme-bootstrap.conf` answers Let's Encrypt's validation. Also removes obsolete certificates from older setups. |
 | `sudo ./cert.sh renew [-f] [-n]` | Renews the certificate now if it is due (`-f`/`--force`: renew anyway; `-n`/`--dry-run`: test only). |
 | `./cert.sh check [-d DOMAIN] [-m DAYS] [-p PORT]` | Checks the certificate actually served on port 443 (see below). |
 | `./cert.sh help [COMMAND]` | Shows all commands, or every option of one command. `-h`/`--help` also works after a command. |
 
-Every option has a short and a long form (`-d`/`--domain`, `-e`/`--email`, `-c`/`--config`, ...); see `./cert.sh help <command>`.
+Every option has a short and a long form (`-f`/`--force`, `-c`/`--config`, ...); see `./cert.sh help <command>`.
 
 nginx gets the domain only from the generated file `/etc/nginx/snippets/pypam-server-name.conf` (`server_name <DOMAIN>;`). `nginx/pypam.conf` itself contains no domain, and the site is matched by name, so other sites on the same nginx are not affected.
 

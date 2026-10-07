@@ -20,7 +20,7 @@ BOOTSTRAP_SITE="/etc/nginx/sites-enabled/pypam-acme-bootstrap.conf"
 CRON_FILE="/etc/cron.d/certbot-pypam"
 DEPLOY_HOOK="/etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh"
 
-# Configuration priority: command-line option > environment variable > config file
+# DOMAIN and EMAIL are read only from the config file (never from options or the environment)
 CONFIG_FILE="$SCRIPT_DIR/cert.conf"
 CONFIG_EXPLICIT=""
 
@@ -44,15 +44,14 @@ usage_error() {
 }
 
 load_config() {
-    local env_domain="${DOMAIN:-}" env_email="${EMAIL:-}"
+    DOMAIN=""
+    EMAIL=""
     if [ -f "$CONFIG_FILE" ]; then
         # shellcheck source=cert.conf.example
         . "$CONFIG_FILE"
     elif [ -n "$CONFIG_EXPLICIT" ]; then
         die "config file not found: $CONFIG_FILE"
     fi
-    DOMAIN="${env_domain:-${DOMAIN:-}}"
-    EMAIL="${env_email:-${EMAIL:-}}"
 }
 
 require_root() {
@@ -61,13 +60,13 @@ require_root() {
 
 require_domain() {
     if [ -z "${DOMAIN:-}" ] || [ "$DOMAIN" = "example.com" ]; then
-        die "DOMAIN is not set. Use --domain, or run 'cp cert.conf.example cert.conf' and set DOMAIN."
+        die "DOMAIN is not set in $CONFIG_FILE. Run 'cp cert.conf.example cert.conf' and set DOMAIN."
     fi
 }
 
 require_email() {
     if [ -z "${EMAIL:-}" ] || [ "$EMAIL" = "you@example.com" ]; then
-        die "EMAIL is not set. Use --email, or set EMAIL in cert.conf."
+        die "EMAIL is not set in $CONFIG_FILE. Set EMAIL there."
     fi
 }
 
@@ -233,14 +232,12 @@ HOOK
 # ---------------------------------------------------------------------------
 
 cmd_install() {
-    local opts opt_domain="" opt_email="" force="" no_check=""
-    opts="$(getopt -n "$PROG install" -o d:e:c:fh -l domain:,email:,config:,force,no-check,help -- "$@")" \
+    local opts force="" no_check=""
+    opts="$(getopt -n "$PROG install" -o c:fh -l config:,force,no-check,help -- "$@")" \
         || usage_error install
     eval set -- "$opts"
     while true; do
         case "$1" in
-            -d | --domain) opt_domain="$2"; shift 2 ;;
-            -e | --email) opt_email="$2"; shift 2 ;;
             -c | --config) CONFIG_FILE="$2"; CONFIG_EXPLICIT=1; shift 2 ;;
             -f | --force) force=1; shift ;;
             --no-check) no_check=1; shift ;;
@@ -252,8 +249,6 @@ cmd_install() {
 
     require_root
     load_config
-    DOMAIN="${opt_domain:-$DOMAIN}"
-    EMAIL="${opt_email:-$EMAIL}"
     require_domain
     require_email
 
@@ -436,9 +431,8 @@ Commands:
   check     Check the certificate served on the HTTPS port. Works on any machine.
   help      Show this help, or the help of a command: $PROG help <command>
 
-The domain and e-mail are read from cert.conf next to this script
-(cp cert.conf.example cert.conf), from the DOMAIN and EMAIL environment variables,
-or from command-line options, in increasing order of priority.
+The domain and e-mail are read only from cert.conf next to this script
+(cp cert.conf.example cert.conf), or from the file given with --config.
 
 Run '$PROG help <command>' or '$PROG <command> --help' for the options of a command.
 EOF
@@ -452,11 +446,11 @@ certificate with the webroot method (stored as '$CERT_NAME'), installs nginx/pyp
 configures automatic renewal, removes obsolete certificates from older setups, restarts
 PyPAM and checks the certificate being served.
 
+DOMAIN and EMAIL (for the Let's Encrypt account) are read only from the configuration file.
+
 Refuses to run when the certificate is already installed, unless --force is given.
 
 Options:
-  -d, --domain DOMAIN   domain pointing to this server (default: DOMAIN in cert.conf)
-  -e, --email EMAIL     e-mail for the Let's Encrypt account (default: EMAIL in cert.conf)
   -c, --config FILE     configuration file (default: cert.conf next to this script)
   -f, --force           reinstall: overwrite the nginx and renewal setup and request a
                         new certificate (also used to change the domain)
@@ -465,7 +459,6 @@ Options:
 
 Examples:
   sudo $PROG install
-  sudo $PROG install -d example.com -e you@example.com
   sudo $PROG install --force
 EOF
             ;;
