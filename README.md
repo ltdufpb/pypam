@@ -63,7 +63,7 @@ The domain is never committed to the repository. It lives in `cert.conf`, which 
 cp cert.conf.example cert.conf
 nano cert.conf   # set DOMAIN=example.com and EMAIL=you@example.com
 ```
-`DOMAIN` and `EMAIL` are read only from `cert.conf`; they can't be given as command-line options or environment variables.
+`DOMAIN` and `EMAIL` are read only from `cert.conf`; they can't be given as command-line options or environment variables. Every `cert.sh` command except `help` stops right away if `cert.conf` is missing or doesn't set `DOMAIN`.
 
 #### Run the setup
 ```bash
@@ -115,10 +115,10 @@ To renew by hand, run `sudo ./cert.sh renew` (only if due) or `sudo ./cert.sh re
 > **Why the certificate used to expire:** older versions of the setup script obtained it with certbot's `standalone` method. certbot reuses that method on every renewal, and it needs port 80 free. Since nginx is always on port 80, every automatic renewal failed silently.
 
 #### Verifying the certificate
-`./cert.sh check` connects to the server like a browser would and checks the certificate it is actually served. It works on the server or on any Linux machine with `openssl`, and does not need root:
+`./cert.sh check` connects to the server like a browser would and checks the certificate it is actually served. It works on the server or on any Linux machine with `openssl` and a copy of `cert.conf`, and does not need root:
 ```bash
 ./cert.sh check                       # uses DOMAIN from cert.conf
-./cert.sh check -d example.com -m 30  # explicit domain; fail if less than 30 days left
+./cert.sh check -d example.com -m 30  # another domain; fail if less than 30 days left
 ```
 It prints the subject, issuer and validity dates, followed by `OK`/`FAIL` lines for these checks:
 - the chain is trusted and matches the hostname;

@@ -22,7 +22,6 @@ DEPLOY_HOOK="/etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh"
 
 # DOMAIN and EMAIL are read only from the config file (never from options or the environment)
 CONFIG_FILE="$SCRIPT_DIR/cert.conf"
-CONFIG_EXPLICIT=""
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -43,15 +42,16 @@ usage_error() {
     exit 2
 }
 
+# Reads the config file; stops if it is missing or does not set DOMAIN.
 load_config() {
+    [ -f "$CONFIG_FILE" ] \
+        || die "config file not found: $CONFIG_FILE. Run 'cp cert.conf.example cert.conf' and set DOMAIN and EMAIL."
+    # Ignore DOMAIN/EMAIL inherited from the environment
     DOMAIN=""
     EMAIL=""
-    if [ -f "$CONFIG_FILE" ]; then
-        # shellcheck source=cert.conf.example
-        . "$CONFIG_FILE"
-    elif [ -n "$CONFIG_EXPLICIT" ]; then
-        die "config file not found: $CONFIG_FILE"
-    fi
+    # shellcheck source=cert.conf.example
+    . "$CONFIG_FILE"
+    require_domain
 }
 
 require_root() {
@@ -60,7 +60,7 @@ require_root() {
 
 require_domain() {
     if [ -z "${DOMAIN:-}" ] || [ "$DOMAIN" = "example.com" ]; then
-        die "DOMAIN is not set in $CONFIG_FILE. Run 'cp cert.conf.example cert.conf' and set DOMAIN."
+        die "DOMAIN is not set in $CONFIG_FILE."
     fi
 }
 
@@ -238,7 +238,7 @@ cmd_install() {
     eval set -- "$opts"
     while true; do
         case "$1" in
-            -c | --config) CONFIG_FILE="$2"; CONFIG_EXPLICIT=1; shift 2 ;;
+            -c | --config) CONFIG_FILE="$2"; shift 2 ;;
             -f | --force) force=1; shift ;;
             --no-check) no_check=1; shift ;;
             -h | --help) cmd_help install; return 0 ;;
@@ -247,10 +247,9 @@ cmd_install() {
     done
     [ $# -eq 0 ] || usage_error install "unexpected argument: $1"
 
-    require_root
     load_config
-    require_domain
     require_email
+    require_root
 
     if is_installed && [ -z "$force" ]; then
         die "PyPAM HTTPS is already installed for $(installed_domain). Use '$PROG install --force' to reinstall, or '$PROG renew' to renew the certificate."
@@ -277,7 +276,7 @@ cmd_install() {
 }
 
 cmd_renew() {
-    local opts force="" dry_run="" no_check="" config_args=()
+    local opts force="" dry_run="" no_check=""
     opts="$(getopt -n "$PROG renew" -o fnc:h -l force,dry-run,config:,no-check,help -- "$@")" \
         || usage_error renew
     eval set -- "$opts"
@@ -285,7 +284,7 @@ cmd_renew() {
         case "$1" in
             -f | --force) force=1; shift ;;
             -n | --dry-run) dry_run=1; shift ;;
-            -c | --config) config_args=(--config "$2"); shift 2 ;;
+            -c | --config) CONFIG_FILE="$2"; shift 2 ;;
             --no-check) no_check=1; shift ;;
             -h | --help) cmd_help renew; return 0 ;;
             --) shift; break ;;
@@ -293,6 +292,7 @@ cmd_renew() {
     done
     [ $# -eq 0 ] || usage_error renew "unexpected argument: $1"
 
+    load_config
     require_root
     is_installed || die "the '$CERT_NAME' certificate is not installed. Run '$PROG install' first."
 
@@ -306,7 +306,7 @@ cmd_renew() {
     if [ -z "$dry_run" ] && [ -z "$no_check" ]; then
         echo ""
         echo "==> Checking the certificate in use..."
-        cmd_check "${config_args[@]}"
+        cmd_check --config "$CONFIG_FILE"
     fi
 }
 
@@ -323,7 +323,7 @@ cmd_check() {
             -d | --domain) opt_domain="$2"; shift 2 ;;
             -m | --min-days) min_days="$2"; shift 2 ;;
             -p | --port) port="$2"; shift 2 ;;
-            -c | --config) CONFIG_FILE="$2"; CONFIG_EXPLICIT=1; shift 2 ;;
+            -c | --config) CONFIG_FILE="$2"; shift 2 ;;
             -h | --help) cmd_help check; return 0 ;;
             --) shift; break ;;
         esac
@@ -334,15 +334,8 @@ cmd_check() {
         usage_error check "--port must be a number from 1 to 65535: $port"
     fi
 
-    local domain="$opt_domain"
-    if [ -z "$domain" ]; then
-        load_config
-        domain="$DOMAIN"
-        if [ -z "$domain" ] || [ "$domain" = "example.com" ]; then
-            domain="$(installed_domain)"
-        fi
-    fi
-    [ -n "$domain" ] || die "no domain to check. Use --domain, or set DOMAIN in cert.conf."
+    load_config
+    local domain="${opt_domain:-$DOMAIN}"
     command -v openssl > /dev/null || die "openssl is not installed."
 
     local failed=0
@@ -433,6 +426,7 @@ Commands:
 
 The domain and e-mail are read only from cert.conf next to this script
 (cp cert.conf.example cert.conf), or from the file given with --config.
+Every command except help stops if that file is missing or does not set DOMAIN.
 
 Run '$PROG help <command>' or '$PROG <command> --help' for the options of a command.
 EOF
@@ -474,8 +468,7 @@ Options:
   -f, --force           renew even if the certificate is not due yet
   -n, --dry-run         test the renewal against the Let's Encrypt staging server,
                         without saving a certificate
-  -c, --config FILE     configuration file used by the final check
-                        (default: cert.conf next to this script)
+  -c, --config FILE     configuration file (default: cert.conf next to this script)
       --no-check        do not check the certificate afterwards
   -h, --help            show this help
 
@@ -497,8 +490,7 @@ When run as root on the server, also checks that nginx serves the certificate on
 Exit status: 0 if every check passes, 1 if any fails, 2 on a usage error.
 
 Options:
-  -d, --domain DOMAIN   domain to check (default: DOMAIN in cert.conf, or the domain
-                        of the installed certificate)
+  -d, --domain DOMAIN   domain to check (default: DOMAIN in cert.conf)
   -m, --min-days DAYS   fail if the certificate expires in fewer days (default: 14)
   -p, --port PORT       HTTPS port (default: 443)
   -c, --config FILE     configuration file (default: cert.conf next to this script)
