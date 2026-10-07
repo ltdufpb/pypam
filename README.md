@@ -128,6 +128,8 @@ The exit status is `0` when everything is OK and `1` otherwise. Let's Encrypt no
 # /etc/cron.d/pypam-check-cert
 0 8 * * 1 root /home/ubuntu/pypam/check-cert.sh > /dev/null || logger -t pypam "TLS certificate check FAILED"
 ```
+On macOS, the bundled LibreSSL may not support every option used by the script; install OpenSSL (`brew install openssl`) and put it first in your `PATH`.
+
 Without the script, you can also check the dates with `echo | openssl s_client -connect example.com:443 -servername example.com 2>/dev/null | openssl x509 -noout -dates`.
 
 #### Migrating an existing server

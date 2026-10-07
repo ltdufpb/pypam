@@ -71,7 +71,8 @@ certbot certonly --webroot \
     --non-interactive \
     --agree-tos \
     --email "$EMAIL" \
-    --keep-until-expiring
+    --keep-until-expiring \
+    --renew-with-new-domains
 
 # Pick up the new certificate (in bootstrap mode, cleanup_bootstrap does it on exit)
 if [ -z "$BOOTSTRAPPED" ] && systemctl is-active --quiet nginx; then

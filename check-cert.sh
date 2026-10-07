@@ -29,7 +29,11 @@ fail() { echo "FAIL  $*"; FAILED=1; }
 echo "Checking https://$DOMAIN:$PORT ..."
 echo ""
 
-handshake="$(echo | timeout 20 openssl s_client -connect "$DOMAIN:$PORT" -servername "$DOMAIN" \
+# Bound the connection time when `timeout` exists (it isn't installed by default on macOS)
+TIMEOUT=()
+command -v timeout > /dev/null && TIMEOUT=(timeout 20)
+
+handshake="$(echo | ${TIMEOUT[@]+"${TIMEOUT[@]}"} openssl s_client -connect "$DOMAIN:$PORT" -servername "$DOMAIN" \
     -verify_hostname "$DOMAIN" -showcerts 2> /dev/null || true)"
 served_cert="$(echo "$handshake" | openssl x509 2> /dev/null || true)"
 
@@ -39,10 +43,10 @@ if [ -z "$served_cert" ]; then
 fi
 
 echo "$served_cert" | openssl x509 -noout -subject -issuer -startdate -enddate | sed 's/^/      /'
-echo "$served_cert" | openssl x509 -noout -ext subjectAltName 2> /dev/null | sed -n 's/^ *\(DNS:.*\)/      SAN: \1/p'
+echo "$served_cert" | openssl x509 -noout -ext subjectAltName 2> /dev/null | sed -n 's/^ *\(DNS:.*\)/      SAN: \1/p' || true
 echo ""
 
-verify_line="$(echo "$handshake" | grep -m1 'Verify return code:' | sed 's/^ *//')"
+verify_line="$(echo "$handshake" | grep -m1 'Verify return code:' | sed 's/^ *//' || true)"
 if echo "$verify_line" | grep -q 'Verify return code: 0 '; then
     ok "certificate chain is trusted and matches hostname $DOMAIN"
 else
