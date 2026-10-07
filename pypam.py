@@ -70,7 +70,6 @@ Layer 5: Process Privilege
   The terminal uses a hidden 'input' element to proxy focus and keystrokes.
 """
 
-import json
 import os
 import ast
 import asyncio
@@ -84,6 +83,7 @@ import shutil
 import secrets
 from fastapi import FastAPI, WebSocket, Request, Depends
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
@@ -915,46 +915,12 @@ HEADER_TEMPLATE = """
 
 # --- MAIN STUDENT UI ---
 
-# CodeMirror 6 is loaded as ES modules from esm.sh. The "*" prefix leaves each module's own
-# imports unresolved, and the import map pins every package to a single URL, so the browser
-# loads exactly one copy of each (CodeMirror rejects two copies of @codemirror/state).
-# The list is the full npm dependency tree of the packages imported by the editor.
-CM_PACKAGES = {
-    "@codemirror/autocomplete": "6.20.3",
-    "@codemirror/commands": "6.11.1",
-    "@codemirror/lang-python": "6.2.1",
-    "@codemirror/language": "6.12.4",
-    "@codemirror/state": "6.7.6",
-    "@codemirror/view": "6.43.13",
-    "@lezer/common": "1.5.3",
-    "@lezer/highlight": "1.2.5",
-    "@lezer/lr": "1.4.10",
-    "@lezer/python": "1.1.19",
-    "@marijn/find-cluster-break": "1.0.4",
-    "crelt": "1.0.7",
-    "style-mod": "4.1.4",
-    "w3c-keyname": "2.2.8",
-}
-CM_IMPORT_MAP = json.dumps(
-    {
-        "imports": {
-            name: f"https://esm.sh/*{name}@{version}"
-            for name, version in CM_PACKAGES.items()
-        }
-    },
-    indent=4,
-)
-
-
 HTML = f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=yes">
 <title>PyPAM - Editor de Python Online do Prof. Alan Moraes</title>
-<script type="importmap">
-{CM_IMPORT_MAP}
-</script>
 <style>
 {SHARED_CSS}
 #editor-container {{ flex:1; overflow:hidden; background:#fff; position:relative; }}
@@ -1166,31 +1132,55 @@ function removeCursor(){{
 
 initApp();
 </script>
-<script type="module">
-import {{EditorView, keymap, lineNumbers, drawSelection}} from "@codemirror/view";
-import {{EditorState}} from "@codemirror/state";
-import {{indentUnit, indentOnInput, bracketMatching, syntaxHighlighting, HighlightStyle}} from "@codemirror/language";
-import {{defaultKeymap, history, historyKeymap}} from "@codemirror/commands";
-import {{python}} from "@codemirror/lang-python";
-import {{tags}} from "@lezer/highlight";
+<script src="/static/codemirror.js"></script>
+<script>
+// Python built-ins coloured like keywords, as in the previous editor
+const BUILTINS = new Set(("abs all any ascii bin bool breakpoint bytearray bytes callable chr classmethod compile " +
+    "complex delattr dict dir divmod enumerate eval exec filter float format frozenset getattr globals " +
+    "hasattr hash help hex id input int isinstance issubclass iter len list locals map max memoryview min " +
+    "next object oct open ord pow print property range repr reversed round set setattr slice sorted " +
+    "staticmethod str sum super tuple type vars zip").split(" "));
+const builtinMark = CM.Decoration.mark({{class: "cm-builtin"}});
+
+function builtinDecorations(view) {{
+    const builder = new CM.RangeSetBuilder();
+    for (const {{from, to}} of view.visibleRanges) {{
+        CM.syntaxTree(view.state).iterate({{from, to, enter: (node) => {{
+            if (node.name === "VariableName" && BUILTINS.has(view.state.doc.sliceString(node.from, node.to))) {{
+                builder.add(node.from, node.to, builtinMark);
+            }}
+        }}}});
+    }}
+    return builder.finish();
+}}
+
+const builtins = CM.ViewPlugin.fromClass(class {{
+    constructor(view) {{ this.decorations = builtinDecorations(view); }}
+    update(update) {{
+        if (update.docChanged || update.viewportChanged || CM.syntaxTree(update.state) !== CM.syntaxTree(update.startState)) {{
+            this.decorations = builtinDecorations(update.view);
+        }}
+    }}
+}}, {{decorations: (plugin) => plugin.decorations}});
 
 // Python colours (VS Code Light)
-const highlight = HighlightStyle.define([
-    {{tag: tags.keyword, color: "#0000ff", fontWeight: "bold"}},
-    {{tag: [tags.bool, tags.null, tags.self], color: "#0000ff"}},
-    {{tag: tags.string, color: "#a31515"}},
-    {{tag: tags.comment, color: "#008000", fontStyle: "italic"}},
-    {{tag: tags.number, color: "#098658"}},
-    {{tag: [tags.function(tags.definition(tags.variableName)), tags.definition(tags.className)], color: "#795e26"}},
-    {{tag: tags.operator, color: "#333"}}
+const highlight = CM.HighlightStyle.define([
+    {{tag: CM.tags.keyword, color: "#0000ff", fontWeight: "bold"}},
+    {{tag: [CM.tags.bool, CM.tags.null, CM.tags.self], color: "#0000ff"}},
+    {{tag: CM.tags.string, color: "#a31515"}},
+    {{tag: CM.tags.comment, color: "#008000", fontStyle: "italic"}},
+    {{tag: CM.tags.number, color: "#098658"}},
+    {{tag: [CM.tags.function(CM.tags.definition(CM.tags.variableName)), CM.tags.definition(CM.tags.className)], color: "#795e26"}},
+    {{tag: CM.tags.operator, color: "#333"}}
 ]);
 
-const theme = EditorView.theme({{
+const theme = CM.EditorView.theme({{
     "&": {{height: "100%", fontSize: "14px", backgroundColor: "#fff"}},
     "&.cm-focused": {{outline: "none"}},
     ".cm-scroller": {{fontFamily: '"Fira Code", monospace', lineHeight: "1.6"}},
     ".cm-gutters": {{backgroundColor: "#f8f9fa", borderRight: "1px solid #e5e7eb", color: "#adb5bd"}},
-    ".cm-lineNumbers .cm-gutterElement": {{padding: "0 8px"}}
+    ".cm-lineNumbers .cm-gutterElement": {{padding: "0 8px"}},
+    ".cm-builtin": {{color: "#0000ff"}}
 }});
 
 // Tab inserts four spaces at the cursor
@@ -1199,21 +1189,23 @@ function insertTab(view) {{
     return true;
 }}
 
-editor = new EditorView({{
+editor = new CM.EditorView({{
     parent: document.getElementById("editor-container"),
     extensions: [
-        lineNumbers(),
-        history(),
-        drawSelection(),
-        indentOnInput(),
-        bracketMatching(),
-        python(),
-        indentUnit.of("    "),
-        EditorState.tabSize.of(4),
-        keymap.of([{{key: "Tab", run: insertTab}}, ...defaultKeymap, ...historyKeymap]),
-        syntaxHighlighting(highlight),
+        CM.lineNumbers(),
+        CM.history(),
+        CM.drawSelection(),
+        CM.indentOnInput(),
+        CM.bracketMatching(),
+        CM.python(),
+        CM.indentUnit.of("    "),
+        CM.EditorState.tabSize.of(4),
+        // Backspace deletes one character, also inside indentation
+        CM.keymap.of([{{key: "Tab", run: insertTab}}, {{key: "Backspace", run: CM.deleteCharBackwardStrict}}, ...CM.defaultKeymap, ...CM.historyKeymap]),
+        CM.syntaxHighlighting(highlight),
+        builtins,
         theme,
-        EditorView.contentAttributes.of({{autocapitalize: "off", autocorrect: "off", spellcheck: "false"}})
+        CM.EditorView.contentAttributes.of({{autocapitalize: "off", autocorrect: "off", spellcheck: "false"}})
     ]
 }});
 </script>
@@ -1362,6 +1354,16 @@ document.getElementById("admin-login").style.display = "flex";
 </script>
 </body>
 </html>"""
+
+
+# CodeMirror 6 bundle used by the student editor (built by build-codemirror.sh)
+app.mount(
+    "/static",
+    StaticFiles(
+        directory=os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+    ),
+    name="static",
+)
 
 
 @app.get("/", response_class=HTMLResponse)

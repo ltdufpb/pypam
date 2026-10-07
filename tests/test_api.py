@@ -143,6 +143,11 @@ async def test_student_page_uses_codemirror6():
 
         # CodeMirror 6 always edits through contenteditable, which iOS needs to offer
         # "Paste"; CodeMirror 5's inputStyle "textarea" made pasting impossible on iPhones
-        assert '"@codemirror/view": "https://esm.sh/*@codemirror/view@6.' in page
+        assert '<script src="/static/codemirror.js"></script>' in page
         assert "codemirror/5." not in page
         assert "inputStyle" not in page
+
+        # The bundle is served by PyPAM itself and contains CodeMirror 6
+        response = await ac.get("/static/codemirror.js")
+        assert response.status_code == 200
+        assert "@codemirror/view@6." in response.text[:500]
