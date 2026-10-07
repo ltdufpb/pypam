@@ -57,15 +57,15 @@ PyPAM uses **nginx** with a free **Let's Encrypt** certificate.
 
 #### Before you start
 - Point your domain to the server.
-- Open ports **80** and **443**, and keep port 80 open: certificate renewals use it.
-- Ports must be open in two places:
-  1. **Oracle Cloud Console:** go to **Networking → Virtual cloud networks →** your VCN **→ Security Lists →** the subnet's security list (usually *Default Security List*), and click **Add Ingress Rules**. Add a rule with source CIDR `0.0.0.0/0`, IP protocol *TCP* and destination port `80`, and another one for `443`. If the instance uses a Network Security Group, add the rules there instead.
-  2. **Server firewall (ufw):**
-     ```bash
-     sudo ufw allow 80/tcp
-     sudo ufw allow 443/tcp
-     sudo ufw status
-     ```
+- Open ports **80** and **443** in the server's firewall, and keep port 80 open: certificate renewals use it.
+  ```bash
+  sudo ufw allow 80/tcp
+  sudo ufw allow 443/tcp
+  sudo ufw status
+  ```
+- If your provider also has a firewall in its control panel, open the two ports there too.
+
+> **Oracle Cloud (OCI):** ufw is not enough; the ports must also be open in the OCI Console. Go to **Networking → Virtual cloud networks →** your VCN **→ Security Lists →** the subnet's security list (usually *Default Security List*), and click **Add Ingress Rules**. Add a rule with source CIDR `0.0.0.0/0`, IP protocol *TCP* and destination port `80`, and another one for `443`. If the instance uses a Network Security Group, add the rules there instead.
 
 #### Configure
 Copy `cert.conf.example` to `cert.conf`, and edit `cert.conf` to set `DOMAIN` and `EMAIL`:
