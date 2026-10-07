@@ -55,7 +55,13 @@ sudo systemctl start pypam
 ### 5. Enable HTTPS (Recommended)
 PyPAM uses **nginx** as a reverse proxy for SSL termination with free **Let's Encrypt** certificates.
 
-> **Before you start:** the domain must point to the server, and ports **80** and **443** must be open. On **Oracle Cloud**, open them in **both** the subnet's Security List **and** the instance firewall (OCI Ubuntu images block them in `/etc/iptables/rules.v4`). Port 80 must **stay** open: Let's Encrypt uses it to validate every renewal.
+> **Before you start:** the domain must point to the server, and ports **80** and **443** must be open. Port 80 must **stay** open: Let's Encrypt uses it to validate every renewal.
+>
+> On **Oracle Cloud**, allow them in the subnet's Security List (or the instance's Network Security Group). Then check the instance's own firewall with `sudo iptables -S INPUT`. Some Oracle images ship rules in `/etc/iptables/rules.v4` that reject all incoming traffic except SSH; if the output contains a `REJECT` rule, allow the two ports and save the rules:
+> ```bash
+> sudo iptables -I INPUT -p tcp -m multiport --dports 80,443 -j ACCEPT
+> sudo netfilter-persistent save
+> ```
 
 #### Configure the domain
 The domain is never committed to the repository. It lives in `cert.conf`, which is git-ignored:
