@@ -57,11 +57,11 @@ PyPAM uses **nginx** as a reverse proxy for SSL termination with free **Let's En
 
 > **Before you start:** the domain must point to the server, and ports **80** and **443** must be open. Port 80 must **stay** open: Let's Encrypt uses it to validate every renewal.
 >
-> On **Oracle Cloud**, allow them in the subnet's Security List (or the instance's Network Security Group). Then check the instance's own firewall with `sudo iptables -S INPUT`. Some Oracle images ship rules in `/etc/iptables/rules.v4` that reject all incoming traffic except SSH; if the output contains a `REJECT` rule, allow the two ports and save the rules:
+> On **Oracle Cloud**, allow them in the subnet's Security List (or the instance's Network Security Group). Then check the instance's own firewall with `sudo iptables -S INPUT`. Some Oracle images ship rules in `/etc/iptables/rules.v4` that reject all incoming traffic except SSH; if the output contains a `REJECT` rule, allow the two ports now:
 > ```bash
 > sudo iptables -I INPUT -p tcp -m multiport --dports 80,443 -j ACCEPT
-> sudo netfilter-persistent save
 > ```
+> To keep the rule after a reboot, add the line `-A INPUT -p tcp -m multiport --dports 80,443 -j ACCEPT` to `/etc/iptables/rules.v4`, **above** the `REJECT` line. Don't use `netfilter-persistent save`: it would also save Docker's own rules into the file.
 
 #### Configure the domain
 The domain is never committed to the repository. It lives in `cert.conf`, which is git-ignored:
