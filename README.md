@@ -157,6 +157,8 @@ pip install -r requirements.txt
 sudo systemctl restart pypam
 ```
 
+> **Servers set up before the certificate scripts were added:** these steps don't fix certificate renewal, so the certificate will still expire. After pulling, do the one-time [migration](#migrating-an-existing-server).
+
 ---
 
 ## 🎓 New Term: Updating the Student Roster
