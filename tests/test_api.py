@@ -130,3 +130,19 @@ async def test_logout():
         # Session should now be gone
         response = await ac.get("/me")
         assert response.json() == {"authenticated": False}
+
+
+@pytest.mark.asyncio
+async def test_student_page_uses_codemirror6():
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        response = await ac.get("/")
+        assert response.status_code == 200
+        page = response.text
+
+        # CodeMirror 6 always edits through contenteditable, which iOS needs to offer
+        # "Paste"; CodeMirror 5's inputStyle "textarea" made pasting impossible on iPhones
+        assert '"@codemirror/view": "https://esm.sh/*@codemirror/view@6.' in page
+        assert "codemirror/5." not in page
+        assert "inputStyle" not in page
