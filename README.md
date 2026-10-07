@@ -104,16 +104,6 @@ Let's Encrypt no longer sends expiry e-mails. To be warned in the system log, ad
 0 8 * * 1 root /home/ubuntu/pypam/cert.sh check > /dev/null || logger -t pypam "TLS certificate check FAILED"
 ```
 
-#### Migrating from `setup-https.sh`
-On servers set up with the old `setup-https.sh`, the certificate does not renew. Fix it once:
-```bash
-cd pypam
-git pull
-cp cert.conf.example cert.conf   # then set DOMAIN (the current domain) and EMAIL
-sudo ./cert.sh install
-```
-Afterwards, `sudo certbot certificates` should list a single certificate, named `pypam`.
-
 ---
 
 ## 🔄 Updating PyPAM
@@ -127,8 +117,6 @@ source .venv/bin/activate
 pip install -r requirements.txt
 sudo systemctl restart pypam
 ```
-
-If the server was set up with the old `setup-https.sh`, also [migrate it to `cert.sh`](#migrating-from-setup-httpssh) once.
 
 ---
 
