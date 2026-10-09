@@ -14,7 +14,7 @@ Key Technologies:
 - Backend: FastAPI (Python 3.10+) utilizing ASGI for asynchronous I/O.
 - Execution: Docker Engine via the Docker SDK for Python.
 - Communication: WebSockets (PEP 3156) for low-latency terminal emulation.
-- Frontend: Vanilla JavaScript SPA with CodeMirror 5 for IDE-like features.
+- Frontend: Vanilla JavaScript SPA with CodeMirror 6 for IDE-like features.
 
 Execution Lifecycle:
 1. Student writes code in the CodeMirror editor (Frontend).
@@ -81,12 +81,15 @@ from docker.types import Mount
 import tempfile
 import shutil
 import secrets
+import hashlib
 from fastapi import FastAPI, WebSocket, Request, Depends
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from cachetools import TTLCache
 
 # --- SECURITY CONTEXT ---
@@ -366,6 +369,8 @@ app.add_middleware(
     same_site="lax",
     https_only=HTTPS_ENABLED,
 )
+# Compress responses (the editor bundle drops from ~370 KB to ~125 KB)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 # --- GLOBAL ERROR HANDLING ---
@@ -882,19 +887,6 @@ input:focus { border-color:var(--primary);box-shadow:0 0 0 2px rgba(0,122,204,0.
 .app-header { display:flex;justify-content:space-between;align-items:center;padding:10px 15px;background:var(--secondary);border-bottom:1px solid var(--border) }
 .user-label { color:var(--secondary-text);font-weight:600;font-size:14px }
 .logout-btn { background:none;border:none;color:var(--secondary-text);cursor:pointer;font-size:18px;padding:4px;display:flex;align-items:center }
-
-/* CodeMirror Integration styles */
-.CodeMirror { height: 100%; font-family: "Fira Code", monospace; font-size: 14px; line-height: 1.6; background: #fff; }
-.CodeMirror-gutters { background: #f8f9fa; border-right: 1px solid #e5e7eb; }
-.CodeMirror-linenumber { color: #adb5bd; padding: 0 8px; }
-.cm-s-default .cm-keyword { color: #0000ff; font-weight: bold; }
-.cm-s-default .cm-string { color: #a31515; }
-.cm-s-default .cm-comment { color: #008000; font-style: italic; }
-.cm-s-default .cm-variable-2 { color: #001080; }
-.cm-s-default .cm-def { color: #795e26; }
-.cm-s-default .cm-builtin { color: #0000ff; }
-.cm-s-default .cm-number { color: #098658; }
-.cm-s-default .cm-operator { color: #333; }
 """
 
 # HTML snippet for the standardized login card
@@ -926,13 +918,20 @@ HEADER_TEMPLATE = """
 """
 
 # --- MAIN STUDENT UI ---
+
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+
+# Fingerprint of the editor bundle, added to its URL: browsers cache the file for a year and
+# fetch it again only when a rebuild changes the fingerprint
+with open(os.path.join(STATIC_DIR, "codemirror.js"), "rb") as f:
+    CM_BUNDLE_VERSION = hashlib.sha256(f.read()).hexdigest()[:12]
+
 HTML = f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=yes">
 <title>PyPAM - Editor de Python Online do Prof. Alan Moraes</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.css">
 <style>
 {SHARED_CSS}
 #editor-container {{ flex:1; overflow:hidden; background:#fff; position:relative; }}
@@ -948,9 +947,7 @@ HTML = f"""<!DOCTYPE html>
 </div>
 <div id="editor-view" class="view-container">
     {HEADER_TEMPLATE}
-    <div id="editor-container">
-        <textarea id="code-editor"></textarea>
-    </div>
+    <div id="editor-container"></div>
     <button id="run" class="btn btn-success" onclick="start()">▶ EXECUTAR</button>
 </div>
 <div id="terminal-view" class="view-container">
@@ -961,26 +958,8 @@ HTML = f"""<!DOCTYPE html>
     <button id="back" class="btn btn-secondary" onclick="back()">← Voltar</button>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/python/python.min.js"></script>
 <script>
 var ws, term=document.getElementById("terminal"), termInput=document.getElementById("term-input"), editor;
-
-// Initialize CodeMirror with Python mode and mobile-aware input style
-editor = CodeMirror.fromTextArea(document.getElementById("code-editor"), {{
-    mode: "python",
-    lineNumbers: true,
-    indentUnit: 4,
-    smartIndent: true,
-    tabSize: 4,
-    indentWithTabs: false,
-    inputStyle: "textarea",
-    extraKeys: {{"Tab": function(cm) {{ cm.replaceSelection("    ", "end"); }} }},
-    viewportMargin: Infinity,
-    autocapitalize: false,
-    spellcheck: false,
-    autocorrect: false
-}});
 
 function showView(id) {{
     document.querySelectorAll(".view-container").forEach(d => d.style.display = "none");
@@ -989,8 +968,8 @@ function showView(id) {{
     var u = localStorage.getItem("pypam_u");
     // Update all username labels in headers
     if(u) {{ target.querySelectorAll(".user-display").forEach(el => el.innerText = u); }}
-    // CodeMirror needs a refresh if it was initialized while hidden
-    if(id === "editor-view") setTimeout(() => editor.refresh(), 10);
+    // The editor measures its size again after being hidden (it may not be created yet)
+    if(id === "editor-view" && editor) setTimeout(() => editor.requestMeasure(), 10);
     // Focus terminal proxy on mobile
     if(id === "terminal-view") setTimeout(() => termInput.focus(), 50);
 }}
@@ -998,22 +977,41 @@ function showView(id) {{
 // Clicking the terminal area focuses the hidden input to show the keyboard
 term.onclick = () => termInput.focus();
 
-// Terminal Input Logic: Maps standard keyboard events to TTY control characters
+// Terminal input: the hidden input holds the line typed since the last Enter. Mobile keyboards
+// rewrite whole words while typing (predictive text, autocorrect) and may not report Backspace
+// as a key, so instead of forwarding events, each change sends the difference from what was
+// already sent: one DEL (\\x7f) per removed character, then the new characters.
+var sentLine = [];
+
+function resetTermInput() {{
+    termInput.value = "";
+    sentLine = [];
+}}
+
+function syncTermInput() {{
+    if(!ws || ws.readyState!==1) return;
+    var line = Array.from(termInput.value);
+    var same = 0;
+    while(same < sentLine.length && same < line.length && sentLine[same] === line[same]) same++;
+    var data = "\\x7f".repeat(sentLine.length - same) + line.slice(same).join("");
+    if(data) ws.send(JSON.stringify({{t:"in", d:data}}));
+    sentLine = line;
+}}
+
+termInput.oninput = syncTermInput;
+
 termInput.onkeydown = (e) => {{
     if(!ws || ws.readyState!==1) return;
-    if(e.key === "Enter") ws.send(JSON.stringify({{t:"in",d:"\\n"}}));
-    else if(e.key === "Backspace") ws.send(JSON.stringify({{t:"in",d:"\\x7f"}}));
-    else if(e.ctrlKey && e.key === "c") ws.send(JSON.stringify({{t:"in",d:"\\x03"}}));
-}};
-
-// Handles characters sent by mobile predictive text/autocorrect
-termInput.oninput = (e) => {{
-    if(!ws || ws.readyState!==1) return;
-    var val = e.data || termInput.value;
-    if(val) {{
-        ws.send(JSON.stringify({{t:"in", d:val}}));
+    if(e.key === "Enter") {{
+        e.preventDefault();
+        syncTermInput();
+        ws.send(JSON.stringify({{t:"in",d:"\\n"}}));
+        resetTermInput();
     }}
-    termInput.value = "";
+    else if(e.ctrlKey && e.key === "c") {{
+        ws.send(JSON.stringify({{t:"in",d:"\\x03"}}));
+        resetTermInput();
+    }}
 }};
 
 async function doLogin() {{
@@ -1047,7 +1045,7 @@ async function doLogout() {{
 
 function clearEditor() {{
     if(confirm("Deseja realmente limpar todo o código?")) {{
-        editor.setValue("");
+        editor.dispatch({{changes: {{from: 0, to: editor.state.doc.length, insert: ""}}}});
     }}
 }}
 
@@ -1068,9 +1066,10 @@ async function initApp() {{
 }}
 
 function start(){{
-    var code = editor.getValue();
+    var code = editor.state.doc.toString();
     showView("terminal-view");
     term.innerHTML=""; term.focus();
+    resetTermInput();
     
     var proto=location.protocol==="https:"?"wss:":"ws:";
     ws=new WebSocket(proto+"//"+location.host+"/ws");
@@ -1143,6 +1142,83 @@ function removeCursor(){{
 }}
 
 initApp();
+</script>
+<script src="/static/codemirror.js?v={CM_BUNDLE_VERSION}"></script>
+<script>
+// Python built-ins coloured like keywords, as in the previous editor
+const BUILTINS = new Set(("abs all any ascii bin bool breakpoint bytearray bytes callable chr classmethod compile " +
+    "complex delattr dict dir divmod enumerate eval exec filter float format frozenset getattr globals " +
+    "hasattr hash help hex id input int isinstance issubclass iter len list locals map max memoryview min " +
+    "next object oct open ord pow print property range repr reversed round set setattr slice sorted " +
+    "staticmethod str sum super tuple type vars zip").split(" "));
+const builtinMark = CM.Decoration.mark({{class: "cm-builtin"}});
+
+function builtinDecorations(view) {{
+    const builder = new CM.RangeSetBuilder();
+    for (const {{from, to}} of view.visibleRanges) {{
+        CM.syntaxTree(view.state).iterate({{from, to, enter: (node) => {{
+            if (node.name === "VariableName" && BUILTINS.has(view.state.doc.sliceString(node.from, node.to))) {{
+                builder.add(node.from, node.to, builtinMark);
+            }}
+        }}}});
+    }}
+    return builder.finish();
+}}
+
+const builtins = CM.ViewPlugin.fromClass(class {{
+    constructor(view) {{ this.decorations = builtinDecorations(view); }}
+    update(update) {{
+        if (update.docChanged || update.viewportChanged || CM.syntaxTree(update.state) !== CM.syntaxTree(update.startState)) {{
+            this.decorations = builtinDecorations(update.view);
+        }}
+    }}
+}}, {{decorations: (plugin) => plugin.decorations}});
+
+// Python colours (VS Code Light)
+const highlight = CM.HighlightStyle.define([
+    {{tag: CM.tags.keyword, color: "#0000ff", fontWeight: "bold"}},
+    {{tag: [CM.tags.bool, CM.tags.null, CM.tags.self], color: "#0000ff"}},
+    {{tag: CM.tags.string, color: "#a31515"}},
+    {{tag: CM.tags.comment, color: "#008000", fontStyle: "italic"}},
+    {{tag: CM.tags.number, color: "#098658"}},
+    {{tag: [CM.tags.function(CM.tags.definition(CM.tags.variableName)), CM.tags.definition(CM.tags.className)], color: "#795e26"}},
+    {{tag: CM.tags.operator, color: "#333"}}
+]);
+
+const theme = CM.EditorView.theme({{
+    "&": {{height: "100%", fontSize: "14px", backgroundColor: "#fff"}},
+    "&.cm-focused": {{outline: "none"}},
+    ".cm-scroller": {{fontFamily: '"Fira Code", monospace', lineHeight: "1.6"}},
+    ".cm-gutters": {{backgroundColor: "#f8f9fa", borderRight: "1px solid #e5e7eb", color: "#adb5bd"}},
+    ".cm-lineNumbers .cm-gutterElement": {{padding: "0 8px"}},
+    ".cm-builtin": {{color: "#0000ff"}}
+}});
+
+// Tab inserts four spaces at the cursor
+function insertTab(view) {{
+    view.dispatch(view.state.replaceSelection("    "), {{scrollIntoView: true, userEvent: "input"}});
+    return true;
+}}
+
+editor = new CM.EditorView({{
+    parent: document.getElementById("editor-container"),
+    extensions: [
+        CM.lineNumbers(),
+        CM.history(),
+        CM.drawSelection(),
+        CM.indentOnInput(),
+        CM.bracketMatching(),
+        CM.python(),
+        CM.indentUnit.of("    "),
+        CM.EditorState.tabSize.of(4),
+        // Backspace deletes one character, also inside indentation
+        CM.keymap.of([{{key: "Tab", run: insertTab}}, {{key: "Backspace", run: CM.deleteCharBackwardStrict}}, ...CM.defaultKeymap, ...CM.historyKeymap]),
+        CM.syntaxHighlighting(highlight),
+        builtins,
+        theme,
+        CM.EditorView.contentAttributes.of({{autocapitalize: "off", autocorrect: "off", spellcheck: "false"}})
+    ]
+}});
 </script>
 </body>
 </html>"""
@@ -1289,6 +1365,19 @@ document.getElementById("admin-login").style.display = "flex";
 </script>
 </body>
 </html>"""
+
+
+class CachedStaticFiles(StaticFiles):
+    """Static files that browsers may keep for a year; pages link them with ?v=<fingerprint>."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+
+# CodeMirror 6 bundle used by the student editor (built by build-codemirror.sh)
+app.mount("/static", CachedStaticFiles(directory=STATIC_DIR), name="static")
 
 
 @app.get("/", response_class=HTMLResponse)

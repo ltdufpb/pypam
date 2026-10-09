@@ -2,6 +2,7 @@ import pytest
 from httpx import AsyncClient, ASGITransport
 from pypam import app, ALLOWLIST_FILE, ADMIN_CREDS_FILE
 import os
+import re
 import shutil
 
 
@@ -130,3 +131,28 @@ async def test_logout():
         # Session should now be gone
         response = await ac.get("/me")
         assert response.json() == {"authenticated": False}
+
+
+@pytest.mark.asyncio
+async def test_student_page_uses_codemirror6():
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as ac:
+        response = await ac.get("/")
+        assert response.status_code == 200
+        page = response.text
+
+        # CodeMirror 6 always edits through contenteditable, which iOS needs to offer
+        # "Paste"; CodeMirror 5's inputStyle "textarea" made pasting impossible on iPhones
+        assert "codemirror/5." not in page
+        assert "inputStyle" not in page
+
+        # The bundle is served by PyPAM itself, linked with its fingerprint, cached for a
+        # year and compressed
+        bundle_url = re.search(r'<script src="(/static/codemirror\.js\?v=\w+)">', page)
+        assert bundle_url
+        response = await ac.get(bundle_url.group(1))
+        assert response.status_code == 200
+        assert "@codemirror/view@6." in response.text[:500]
+        assert "immutable" in response.headers["cache-control"]
+        assert response.headers["content-encoding"] == "gzip"
