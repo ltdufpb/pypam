@@ -4,11 +4,13 @@ After=network.target docker.service
 Requires=docker.service
 
 [Service]
+# Edit User, Group and the paths below: set them to the user that runs PyPAM
+# and to the directory where PyPAM is installed.
 Type=simple
-User=ubuntu
-Group=ubuntu
-WorkingDirectory=/home/ubuntu/pypam
-ExecStart=/home/ubuntu/pypam/.venv/bin/python pypam.py
+User=username
+Group=username
+WorkingDirectory=/home/username/pypam
+ExecStart=/home/username/pypam/.venv/bin/python pypam.py
 
 # Self-Healing: Restart within 5 seconds if the process dies
 Restart=always

@@ -41,6 +41,11 @@ This parses the IDs, generates passwords (ID reversed), hashes them, and saves t
 ### 4. Install the Systemd Service
 The service ensures the app starts on boot and restarts automatically if it crashes.
 ```bash
+# Copy the example and edit it: set User, Group and the paths
+# (replace username with the user that runs PyPAM, and adjust the paths)
+cp pypam.service.example pypam.service
+nano pypam.service
+
 # Copy the service file to the system directory
 sudo cp pypam.service /etc/systemd/system/
 
@@ -101,8 +106,9 @@ sudo ./cert.sh renew --dry-run  # tests a renewal
 
 Let's Encrypt no longer sends expiry e-mails. To be warned in the system log, add a weekly check in `/etc/cron.d/pypam-check-cert`:
 ```
-0 8 * * 1 root /home/ubuntu/pypam/cert.sh check > /dev/null || logger -t pypam "TLS certificate check FAILED"
+0 8 * * 1 root <APP_DIR>/cert.sh check > /dev/null || logger -t pypam "TLS certificate check FAILED"
 ```
+Replace `<APP_DIR>` with the directory where PyPAM is installed.
 
 ---
 
@@ -134,13 +140,13 @@ cat students_table.txt | python3 create_student_passwords.py | python3 hash_pass
 
 ### 3. Transfer the file to the live server
 ```bash
-scp students.txt ubuntu@<HOST>:/tmp/students.txt.new
+scp students.txt username@<HOST>:/tmp/students.txt.new
 ```
 
 ### 4. Back up and atomically swap on the live server
 ```bash
-ssh ubuntu@<HOST>
-cd /home/ubuntu/pypam
+ssh username@<HOST>
+cd /home/username/pypam
 cp students.txt students.txt.bak.$(date +%Y%m%d-%H%M%S)
 mv /tmp/students.txt.new students.txt
 wc -l students.txt   # should match the local file's line count
